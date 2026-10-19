@@ -1,6 +1,6 @@
 # Schema Design — `accounts` (companies)
 
-**Status:** ⏳ Awaiting sign-off. Nothing has been created in Supabase yet.
+**Status:** ✅ Signed off 2026-10-19 (exclusion flag kept; no promoted columns, no `name_clean`, name `gtm.accounts`). Not yet pushed to Supabase.
 **Source data:** `data/processed/companies_blitz_2026-10-19.csv` (300 rows, 7 agreed columns incl. `raw`).
 
 ---
@@ -79,9 +79,9 @@ alter table gtm.accounts enable row level security;
 - `db/migrations/001_initial_schema.sql` was the early SQLite placeholder and was never used for real data. It gets replaced by Postgres migrations: `001_gtm_accounts.sql` now, `002_gtm_contacts.sql` after the contacts sign-off.
 - `scripts/data.py` moves from SQLite to Supabase (pooler connection) with upserts on `domain`.
 
-## 5. Open questions for you
+## 5. Decisions (2026-10-19)
 
-1. **Exclusion flag:** add `is_excluded` / `exclusion_reason` (recommended), or delete the 8 no-contact accounts outright?
-2. **Promote any `raw` fields to real columns?** Candidates: `hq_state` (send-time windows), `founded_year`, `type`. Not needed now, since they're queryable in `raw` either way.
-3. **Clean company name:** add a `name_clean` column (*"Recko"* instead of *"Recko | A Stripe company"*) for use in email copy? Only matters if copy uses the company name.
-4. **Naming:** `gtm.accounts` OK, or prefer `companies`?
+1. **Exclusion flag:** ✅ keep `is_excluded` / `exclusion_reason`.
+2. **Promoted `raw` fields:** none for now; query them inside `raw`.
+3. **`name_clean`:** not added; revisit if copy uses the company name.
+4. **Naming:** `gtm.accounts`.
