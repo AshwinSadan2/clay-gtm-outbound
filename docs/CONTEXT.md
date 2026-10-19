@@ -29,7 +29,7 @@ Terms specific to this campaign. Grounded in `BRIEF.md`.
 - **Geography** — United States (company HQ). Contact location is `WORLD` — the company is US-based but its marketing leader may sit anywhere.
 - **Funding filter** — deliberately *not* applied (parked, out of scope). *Note: Blitz company search **does** support funding filters (`last_funding_type`, `total_funding`, `lead_investors`) — the earlier claim that it didn't was wrong. Left out by choice, not capability.*
 - **In market** — a company that satisfies every brief filter at once: Software Development / SaaS, 51–200 employees, US-based, with a marketing leader to reach.
-- **Target list** — the ~300 SaaS companies and ~300 marketing-leader contacts Session 1 produces and stores in Supabase.
+- **Target list** — the 300 SaaS companies and 287 marketing-leader contacts Session 1 produced (Blitz, 2026-10-19) and stores in Supabase (`gtm` schema). 13 companies have no contact: 8 no-match (mostly acquired) + 5 whose contact has no name on LinkedIn.
 - **Account–contact link** — the foreign-key relationship storing each marketing leader (contact) against their company via `contacts.company_domain` → `companies.domain`.
 - **Suppression list** — the set of records we must NOT email: anyone already in the CRM as contacted, opted-out, a current customer, or an open opportunity. Session 2 pulls this from Attio and removes matches from the send list. Suppression is *not* deduplication — see Stack terms.
 
@@ -43,7 +43,11 @@ Technical vocabulary used throughout the project.
 - **Plan mode** — Shift+Tab in Claude Code. Claude proposes a plan instead of executing.
 - **Upsert** — SQL pattern `ON CONFLICT (key) DO UPDATE`. Inserts that update on conflict instead of erroring. Makes scripts re-runnable.
 - **Idempotent** — runnable any number of times with the same final result. Our scripts are idempotent because they upsert.
-- **Pooler** — Supabase's connection-sharing layer on port 6543. Used from scripts to avoid exhausting database connections.
+- **Pooler** — Supabase's **transaction pooler** on port 6543 (`SUPABASE_DB_URL_POOLER`). All data loads go through it; it can't hold prepared statements, so the loader turns them off. Migrations (DDL) use the direct connection on port 5432 (`SUPABASE_DB_URL_DIRECT`).
+- **`gtm` schema** — where all campaign tables live in Supabase. `public` belongs to an unrelated movies project and is never touched.
+- **Natural keys** — no surrogate ID columns. `companies.domain` (case-insensitive `citext`) and `contacts.person_linkedin_url` are the primary keys.
+- **Loader** — `scripts/data.py`: `migrate`, `load-companies`, `load-contacts`, `stats`. Idempotent upserts, one commit per row, bad rows to `logs/data_errors.log`. Contacts load only if their company is already loaded (keeps the foreign key intact) and they have a first name.
+- **Sample load** — sample-before-scale for the database: `--limit 5` loads the first 5 companies, then the 5 contacts belonging to them, for review before the full load.
 - **Raw jsonb** — the `raw` column on `companies` and `contacts` holding the full API response. Our escape valve when APIs add new fields we want later.
 - **Sample-before-scale** — discipline of running every paid-API script on `--limit=10` first and eyeballing the output before running on the full list.
 - **Streaming / resumable** — write each record to the CSV as it arrives (never buffer the whole run in memory) and keep a cursor so a crash resumes from the last saved row instead of re-charging the whole pull.

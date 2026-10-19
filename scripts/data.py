@@ -3,16 +3,17 @@
 
 Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt):
     .venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations
-    .venv/bin/python scripts/data.py load-companies FILE     # upsert into gtm.companies on domain
-    .venv/bin/python scripts/data.py load-contacts FILE      # upsert into gtm.contacts on person_linkedin_url
+    .venv/bin/python scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
+    .venv/bin/python scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
     .venv/bin/python scripts/data.py stats                   # row counts and link checks
 
 Loads are upserts, so re-running is safe; unchanged rows are left untouched (updated_at
 only moves when something changed). Each row commits on its own: a bad row is logged to
-logs/data_errors.log and the load carries on. Contacts with no first name are skipped
-(decision 2026-10-19: they can't get {FIRST_NAME}).
-Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER.
+logs/data_errors.log and the load carries on. Contacts are skipped if they have no first name
+(decision 2026-10-19: they can't get {FIRST_NAME}) or their company isn't loaded yet.
+Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER (transaction pooler, port 6543).
 """
+import argparse
 import csv
 import json
 import logging
@@ -102,15 +103,19 @@ def to_value(column, value):
     return value
 
 
-def load(table, columns, key, file, skip=None):
+def load(table, columns, key, file, skip=None, limit=None):
+    """Upsert rows from a CSV. `skip(row, conn)` returns a reason to skip a row, or None.
+    `limit` caps the rows written (inserted + updated + unchanged) this run, for samples."""
     sql = upsert_sql(table, columns, key)
     inserted = updated = unchanged = skipped = errors = 0
     with connect(pooled=True) as conn, open(file, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
+            if limit is not None and inserted + updated + unchanged >= limit:
+                break
             missing = [c for c in columns if c not in row]
             if missing:
                 sys.exit(f"{file} is missing columns: {missing}")
-            reason = skip(row) if skip else None
+            reason = skip(row, conn) if skip else None
             if reason:
                 skipped += 1
                 logging.info("skipped %s: %s", row[key], reason)
@@ -149,6 +154,16 @@ def stats():
         print("contacts by icp_tier         " + ", ".join(f"{t}: {n}" for t, n in tiers))
 
 
+def skip_contact(row, conn):
+    if not row["first_name"].strip():
+        return "no first name"
+    # Only load contacts whose company is already in the database, so a sample load
+    # (or a partial companies load) never breaks the companies <- contacts link.
+    if conn.execute("select 1 from gtm.companies where domain = %s", (row["company_domain"],)).fetchone() is None:
+        return "company not loaded yet"
+    return None
+
+
 def main():
     LOG_FILE.parent.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -156,18 +171,22 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
         handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
     )
-    args = sys.argv[1:]
-    if args == ["migrate"]:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("command", choices=["migrate", "load-companies", "load-contacts", "stats"])
+    parser.add_argument("file", nargs="?", help="CSV to load (load-* commands)")
+    parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
+    args = parser.parse_args()
+    if args.command.startswith("load-") and not args.file:
+        parser.error(f"{args.command} needs a CSV file")
+
+    if args.command == "migrate":
         migrate()
-    elif len(args) == 2 and args[0] == "load-companies":
-        load("companies", COMPANY_COLUMNS, "domain", args[1])
-    elif len(args) == 2 and args[0] == "load-contacts":
-        load("contacts", CONTACT_COLUMNS, "person_linkedin_url", args[1],
-             skip=lambda r: None if r["first_name"].strip() else "no first name")
-    elif args == ["stats"]:
-        stats()
+    elif args.command == "load-companies":
+        load("companies", COMPANY_COLUMNS, "domain", args.file, limit=args.limit)
+    elif args.command == "load-contacts":
+        load("contacts", CONTACT_COLUMNS, "person_linkedin_url", args.file, skip=skip_contact, limit=args.limit)
     else:
-        sys.exit(__doc__)
+        stats()
 
 
 if __name__ == "__main__":
