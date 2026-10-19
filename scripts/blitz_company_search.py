@@ -48,7 +48,7 @@ RAW_CSV_COLUMNS = [
 CSV_COLUMNS = [
     "name", "domain", "website", "linkedin_url", "linkedin_id", "industry", "type", "size",
     "employees_on_linkedin", "followers", "founded_year", "hq_city", "hq_state",
-    "hq_country_code", "specialties", "about",
+    "hq_country_code", "specialties", "about", "raw",
 ]
 
 
@@ -105,6 +105,8 @@ def flatten(company, columns=CSV_COLUMNS):
         specialties="; ".join(company.get("specialties") or []),
         about=(company.get("about") or "").replace("\n", " ").strip(),
     )
+    if "raw" in columns:
+        row["raw"] = json.dumps(company)
     return row
 
 
