@@ -1,25 +1,19 @@
 -- 002: contacts (people), linked to companies by domain. No surrogate key.
--- Design: docs/schema-contacts.md (awaiting sign-off).
--- NOT YET APPLIED: run only after both schemas are signed off.
+-- Design: docs/schema-contacts.md (signed off 2026-10-19).
 
 create table gtm.contacts (
-    linkedin_url          text        primary key,           -- natural key + upsert key
-    company_domain        extensions.citext not null
-                          references gtm.companies(domain) on update cascade on delete restrict,
-    first_name            text        not null,
-    last_name             text,
-    full_name             text,
-    job_title             text        not null,
-    headline              text,
-    icp_tier              smallint    not null check (icp_tier between 1 and 6),
-    location_city         text,
-    location_state_code   text,
-    location_country_code text,
-    connections_count     integer,
-    about_me              text,
-    raw                   jsonb       not null,              -- full unfiltered API response
-    created_at            timestamptz not null default now(),
-    updated_at            timestamptz not null default now()
+    person_linkedin_url    text        primary key,                 -- natural person key (unique in our data)
+    company_domain         extensions.citext not null references gtm.companies(domain),  -- FK link to companies
+    icp_tier               smallint    not null check (icp_tier between 1 and 6),
+    first_name             text,
+    last_name              text,
+    job_title              text,
+    headline               text,
+    location_country_code  text,
+    about_me               text,
+    raw                    jsonb       not null,       -- full unfiltered record (person + match meta + link)
+    created_at             timestamptz not null default now(),
+    updated_at             timestamptz not null default now()
 );
 
 -- the primary key doesn't cover lookups by company, so index the FK

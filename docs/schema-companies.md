@@ -1,6 +1,6 @@
 # Schema Design — `companies`
 
-**Status:** ✅ Signed off 2026-10-19. Schema file written: `db/migrations/001_gtm_companies.sql`. **Not yet applied to Supabase.**
+**Status:** ✅ Signed off and applied 2026-10-19 (`db/migrations/001_gtm_companies.sql`). Loaded: 300 companies.
 **Source data:** `data/processed/companies_blitz_2026-10-19.csv` (300 rows).
 
 ---

@@ -1,5 +1,4 @@
 -- 001: gtm schema + companies. Design: docs/schema-companies.md (signed off 2026-10-19).
--- NOT YET APPLIED: run only after both schemas are signed off.
 
 create extension if not exists citext with schema extensions;   -- case-insensitive text
 

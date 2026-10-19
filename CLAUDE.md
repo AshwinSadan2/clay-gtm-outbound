@@ -37,16 +37,16 @@ The owner is not a developer. Explain work in plain English and make technical c
 
 ## The data script
 
-`scripts/data.py` (standard Python only, no installs needed):
+`scripts/data.py` talks to Supabase. It runs from the project virtualenv (`.venv`, set up from `requirements.txt`):
 
 ```
-python3 scripts/data.py migrate                  # create/update the database tables
-python3 scripts/data.py import-accounts FILE     # load accounts CSV (needs a 'domain' column)
-python3 scripts/data.py import-contacts FILE     # load contacts CSV (needs an 'email' column)
-python3 scripts/data.py stats                    # how many rows in each table
+.venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations (direct connection)
+.venv/bin/python scripts/data.py load-companies FILE     # upsert into gtm.companies on domain (pooler)
+.venv/bin/python scripts/data.py load-contacts FILE      # upsert into gtm.contacts on person_linkedin_url
+.venv/bin/python scripts/data.py stats                   # row counts, companies without a contact, tiers
 ```
 
-Duplicates (same domain / same email) are skipped automatically.
+Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad rows go to `logs/data_errors.log` and the load carries on. Contacts without a first name are skipped.
 
 ## API fetch rules (every script that calls an external API)
 

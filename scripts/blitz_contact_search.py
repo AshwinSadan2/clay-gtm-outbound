@@ -11,7 +11,7 @@ Input:  data/processed/companies_blitz_<companies-date>.csv
 Writes (appended as each company finishes; re-runs skip companies already done):
     data/raw/contacts_blitz_<date>.jsonl         one line per company: our ids + the API response, untouched
     data/raw/contacts_blitz_<date>.csv           readable copy of the raw file, every field
-    data/processed/contacts_blitz_<date>.csv     review columns + `raw` JSON column
+    data/processed/contacts_blitz_<date>.csv     gtm.contacts columns, found contacts only
 One record per person found; a company with no match costs nothing.
 Run log: logs/blitz_contact_search.log. Failed calls: logs/blitz_contact_search_errors.log.
 """
@@ -81,12 +81,11 @@ RAW_CSV_COLUMNS = [
     "experiences", "education", "skills", "certifications",
 ]
 
-# Review columns: to be trimmed after the sample audit. Full response stays in `raw`.
+# Processed CSV = the signed-off gtm.contacts columns (docs/schema-contacts.md), found
+# contacts only. No-match companies stay visible in the raw CSV (`status` column).
 CSV_COLUMNS = [
-    "company_name", "company_domain", "company_linkedin_url", "status", "icp_tier",
-    "full_name", "first_name", "last_name", "job_title", "headline", "person_linkedin_url",
-    "location_city", "location_state_code", "location_country_code", "connections_count",
-    "job_start_date", "about_me", "raw",
+    "person_linkedin_url", "company_domain", "icp_tier", "first_name", "last_name",
+    "job_title", "headline", "location_country_code", "about_me", "raw",
 ]
 
 
@@ -261,7 +260,8 @@ def main():
             record = {"company": company, "response": resp}
             raw_out.write(json.dumps(record) + "\n")
             raw_writer.writerow(flatten(record, RAW_CSV_COLUMNS))
-            writer.writerow(flatten(record, CSV_COLUMNS))
+            if resp.get("results"):
+                writer.writerow(flatten(record, CSV_COLUMNS))
             for f in (raw_out, raw_csv_out, csv_out):
                 f.flush()
             results = resp.get("results") or []
