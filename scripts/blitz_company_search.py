@@ -8,10 +8,12 @@ Usage:
     python3 scripts/blitz_company_search.py --limit 300 --resume        # scale, continuing after the sample
 
 Writes (one run = one date-stamped set):
-    data/raw/companies_blitz_<date>.jsonl          every company exactly as returned
+    data/raw/companies_blitz_<date>.jsonl          every company exactly as returned (used for resume/dedup)
+    data/raw/companies_blitz_<date>.csv            readable copy of the raw file, every field
     data/raw/companies_blitz_<date>.cursor         cursor to resume from (the next unread page)
     data/processed/companies_blitz_<date>.csv      flattened, one row per company, for review
-Each company costs 1 Blitz record. Logs go to logs/blitz_company_search.log.
+Each company costs 1 Blitz record. Run log: logs/blitz_company_search.log.
+Failed calls (code, message, request): logs/blitz_company_search_errors.log.
 """
 import argparse
 import csv
@@ -27,6 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 URL = "https://api.blitz-api.ai/v2/search/companies"
 LOG_FILE = ROOT / "logs" / "blitz_company_search.log"
+ERROR_LOG = ROOT / "logs" / "blitz_company_search_errors.log"
 
 APPROVED_FILTERS = {
     "industry": {"include": ["Software Development"]},
@@ -34,6 +37,13 @@ APPROVED_FILTERS = {
     "employee_range": ["51-200"],
     "hq": {"country_code": ["US"]},
 }
+
+# Readable copy of the raw file: every field Blitz returns, with hq split into columns.
+RAW_CSV_COLUMNS = [
+    "name", "domain", "website", "linkedin_url", "linkedin_id", "industry", "type", "size",
+    "employees_on_linkedin", "followers", "founded_year", "hq_city", "hq_state",
+    "hq_country_code", "hq_country_name", "hq_region", "hq_continent", "specialties", "about",
+]
 
 CSV_COLUMNS = [
     "name", "domain", "website", "linkedin_url", "linkedin_id", "industry", "type", "size",
@@ -49,7 +59,19 @@ def env_get(key):
     sys.exit(f"{key} missing from .env")
 
 
+def log_error(code, message, body):
+    """Append one failed call to the error log for review after the run."""
+    with open(ERROR_LOG, "a") as f:
+        f.write(json.dumps({
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "code": code,
+            "message": message,
+            "request": body,
+        }) + "\n")
+
+
 def post(api_key, body, attempts=3):
+    """Return the parsed response, or None after logging the error (never raises)."""
     req = urllib.request.Request(
         URL,
         data=json.dumps(body).encode(),
@@ -61,26 +83,39 @@ def post(api_key, body, attempts=3):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.load(resp)
         except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:500]
-            if e.code in (429, 500, 503) and attempt < attempts:
-                wait = 60 if e.code == 429 else 2 ** attempt
-                logging.warning("HTTP %s, retrying in %ss: %s", e.code, wait, detail)
-                time.sleep(wait)
-                continue
-            sys.exit(f"HTTP {e.code}: {detail}")
+            code, message = e.code, e.read().decode(errors="replace")[:1000]
+        except (urllib.error.URLError, TimeoutError) as e:
+            # A timeout is not retried: Blitz may already have counted the records.
+            log_error("network", str(e), body)
+            return None
+        if code in (429, 500, 503) and attempt < attempts:
+            wait = 60 if code == 429 else 2 ** attempt
+            logging.warning("HTTP %s, retrying in %ss", code, wait)
+            time.sleep(wait)
+            continue
+        log_error(code, message, body)
+        return None
 
 
-def flatten(company):
+def flatten(company, columns=CSV_COLUMNS):
     hq = company.get("hq") or {}
-    row = {c: company.get(c) for c in CSV_COLUMNS}
+    row = {c: company.get(c) for c in columns}
+    row.update({f"hq_{k}": v for k, v in hq.items() if f"hq_{k}" in columns})
     row.update(
-        hq_city=hq.get("city"),
-        hq_state=hq.get("state"),
-        hq_country_code=hq.get("country_code"),
         specialties="; ".join(company.get("specialties") or []),
         about=(company.get("about") or "").replace("\n", " ").strip(),
     )
     return row
+
+
+def open_csv(path, columns):
+    """Open a CSV for appending, writing the header only if the file is new."""
+    is_new = not path.exists()
+    f = open(path, "a", newline="")
+    writer = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
+    if is_new:
+        writer.writeheader()
+    return f, writer
 
 
 def main():
@@ -99,6 +134,7 @@ def main():
     )
 
     raw_file = ROOT / "data" / "raw" / f"companies_blitz_{args.date}.jsonl"
+    raw_csv_file = raw_file.with_suffix(".csv")
     cursor_file = raw_file.with_suffix(".cursor")
     csv_file = ROOT / "data" / "processed" / f"companies_blitz_{args.date}.csv"
 
@@ -117,13 +153,19 @@ def main():
     if raw_file.exists():
         seen = {json.loads(l).get("linkedin_url") for l in raw_file.read_text().splitlines() if l}
 
-    pulled = 0
-    with open(raw_file, "a") as raw_out:
+    pulled = errors = 0
+    raw_csv_out, raw_writer = open_csv(raw_csv_file, RAW_CSV_COLUMNS)
+    csv_out, writer = open_csv(csv_file, CSV_COLUMNS)
+    with open(raw_file, "a") as raw_out, raw_csv_out, csv_out:
         while pulled < args.limit:
             body = {"company": APPROVED_FILTERS, "max_results": min(args.page_size, args.limit - pulled)}
             if cursor:
                 body["cursor"] = cursor
             resp = post(api_key, body)
+            if resp is None:
+                errors += 1
+                logging.error("page failed; cursor saved. Fix the cause, then re-run with --resume")
+                break
             results = resp.get("results") or []
             fair = resp.get("fair_usage") or {}
             for company in results:
@@ -131,8 +173,11 @@ def main():
                     continue
                 seen.add(company.get("linkedin_url"))
                 raw_out.write(json.dumps(company) + "\n")
+                raw_writer.writerow(flatten(company, RAW_CSV_COLUMNS))
+                writer.writerow(flatten(company))
                 pulled += 1
-            raw_out.flush()
+            for f in (raw_out, raw_csv_out, csv_out):
+                f.flush()
             cursor = resp.get("cursor")
             cursor_file.write_text(cursor or "")
             logging.info(
@@ -144,13 +189,11 @@ def main():
                 logging.info("no more pages")
                 break
 
-    # Rebuild the review CSV from everything in the raw file (sample + later runs).
-    companies = [json.loads(l) for l in raw_file.read_text().splitlines() if l]
-    with open(csv_file, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
-        writer.writeheader()
-        writer.writerows(flatten(c) for c in companies)
-    logging.info("wrote %d companies to %s", len(companies), csv_file.relative_to(ROOT))
+    logging.info(
+        "done: %d new companies this run, %d total in %s | errors: %d%s",
+        pulled, len(seen), csv_file.relative_to(ROOT), errors,
+        f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "",
+    )
 
 
 if __name__ == "__main__":

@@ -48,6 +48,12 @@ python3 scripts/data.py stats                    # how many rows in each table
 
 Duplicates (same domain / same email) are skipped automatically.
 
+## API fetch rules (every script that calls an external API)
+
+1. **Stream, never buffer.** Write each record to disk the moment it arrives (append + flush). Never collect results in memory to write at the end.
+2. **Resumable.** Save progress (cursor, page, or last processed ID) after every write. A re-run with `--resume` continues from there and never re-fetches or re-pays for done records.
+3. **Log errors separately, don't panic.** Write every failed call to `logs/<script>_errors.log` with timestamp, HTTP code, message, and the input/request that failed. Retry only `429`/`500`/`503`; on any other error, log it and move to the next record. If a paginated pull can't continue, save the cursor and exit cleanly. Print an error count at the end of the run for review.
+
 ## Connection check
 
 `bash scripts/probe_connections.sh` tests Blitz and Supabase (URL, direct DB, pooler DB) and prints pass/fail only, never key values. Run it before any batch job.
