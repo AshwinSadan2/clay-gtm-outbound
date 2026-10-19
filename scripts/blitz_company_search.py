@@ -45,9 +45,12 @@ RAW_CSV_COLUMNS = [
     "hq_country_code", "hq_country_name", "hq_region", "hq_continent", "specialties", "about",
 ]
 
-# Review CSV columns, agreed in the 2026-10-19 column audit. Everything else
-# Blitz returns is kept, unfiltered, in the `raw` JSON column.
-CSV_COLUMNS = ["name", "domain", "linkedin_url", "industry", "employees_on_linkedin", "about", "raw"]
+# Review CSV columns = the signed-off gtm.accounts columns (docs/schema-accounts.md).
+# Everything else Blitz returns is kept, unfiltered, in the `raw` JSON column.
+CSV_COLUMNS = [
+    "domain", "name", "website", "linkedin_url", "industry", "employees_on_linkedin",
+    "hq_country_code", "about", "raw",
+]
 
 
 def env_get(key):
