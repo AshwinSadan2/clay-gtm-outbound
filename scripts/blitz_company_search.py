@@ -101,7 +101,7 @@ def flatten(company, columns=CSV_COLUMNS):
     row.update({f"hq_{k}": v for k, v in hq.items() if f"hq_{k}" in columns})
     row.update(
         specialties="; ".join(company.get("specialties") or []),
-        about=(company.get("about") or "").replace("\n", " ").strip(),
+        about=" ".join((company.get("about") or "").split()),  # collapse \n, \r, tabs
     )
     if "raw" in columns:
         row["raw"] = json.dumps(company)
