@@ -45,11 +45,9 @@ RAW_CSV_COLUMNS = [
     "hq_country_code", "hq_country_name", "hq_region", "hq_continent", "specialties", "about",
 ]
 
-CSV_COLUMNS = [
-    "name", "domain", "website", "linkedin_url", "linkedin_id", "industry", "type", "size",
-    "employees_on_linkedin", "followers", "founded_year", "hq_city", "hq_state",
-    "hq_country_code", "specialties", "about", "raw",
-]
+# Review CSV columns, agreed in the 2026-10-19 column audit. Everything else
+# Blitz returns is kept, unfiltered, in the `raw` JSON column.
+CSV_COLUMNS = ["name", "domain", "linkedin_url", "industry", "employees_on_linkedin", "about", "raw"]
 
 
 def env_get(key):
