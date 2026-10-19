@@ -30,21 +30,21 @@ Terms specific to this campaign. Grounded in `BRIEF.md`.
 - **Funding filter** — deliberately *not* applied (parked, out of scope). *Note: Blitz company search **does** support funding filters (`last_funding_type`, `total_funding`, `lead_investors`) — the earlier claim that it didn't was wrong. Left out by choice, not capability.*
 - **In market** — a company that satisfies every brief filter at once: Software Development / SaaS, 51–200 employees, US-based, with a marketing leader to reach.
 - **Target list** — the ~300 SaaS companies and ~300 marketing-leader contacts Session 1 produces and stores in Supabase.
-- **Account–contact link** — the foreign-key relationship storing each marketing leader (contact) against their company (account) via `contacts.account_domain` → `accounts.domain`.
+- **Account–contact link** — the foreign-key relationship storing each marketing leader (contact) against their company via `contacts.company_domain` → `companies.domain`.
 - **Suppression list** — the set of records we must NOT email: anyone already in the CRM as contacted, opted-out, a current customer, or an open opportunity. Session 2 pulls this from Attio and removes matches from the send list. Suppression is *not* deduplication — see Stack terms.
 
 ## Stack terms
 
 Technical vocabulary used throughout the project.
 
-- **Account** — a company in our target market. Stored in the `accounts` table.
-- **Contact** — a person at an account. Stored in the `contacts` table. Linked to its account via `account_domain` (→ `accounts.domain`).
+- **Account / company** — a company in our target market. Stored in the `gtm.companies` table (primary key `domain`, case-insensitive).
+- **Contact** — a person at a company. Stored in the `gtm.contacts` table (primary key `linkedin_url`). Linked to its company via `company_domain` (→ `companies.domain`).
 - **Skill** — a reusable Claude Code tool defined by a `SKILL.md` plus optional scripts. Invoked with `/skill-name`.
 - **Plan mode** — Shift+Tab in Claude Code. Claude proposes a plan instead of executing.
 - **Upsert** — SQL pattern `ON CONFLICT (key) DO UPDATE`. Inserts that update on conflict instead of erroring. Makes scripts re-runnable.
 - **Idempotent** — runnable any number of times with the same final result. Our scripts are idempotent because they upsert.
 - **Pooler** — Supabase's connection-sharing layer on port 6543. Used from scripts to avoid exhausting database connections.
-- **Raw jsonb** — the `raw` column on `accounts` and `contacts` holding the full API response. Our escape valve when APIs add new fields we want later.
+- **Raw jsonb** — the `raw` column on `companies` and `contacts` holding the full API response. Our escape valve when APIs add new fields we want later.
 - **Sample-before-scale** — discipline of running every paid-API script on `--limit=10` first and eyeballing the output before running on the full list.
 - **Streaming / resumable** — write each record to the CSV as it arrives (never buffer the whole run in memory) and keep a cursor so a crash resumes from the last saved row instead of re-charging the whole pull.
 - **Cursor pagination** — Blitz's pagination pattern: each response includes a cursor token; pass it back for the next page; stop when it returns null.

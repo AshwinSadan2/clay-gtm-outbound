@@ -62,13 +62,14 @@ Duplicates (same domain / same email) are skipped automatically.
 
 - Blitz (people/company data, emails): `docs/blitz-api-reference.md`. Our plan is a free trial with ~1,000 records/month and 5 req/s per endpoint, so cap every pull.
 
-## Database tables
+## Database tables (Supabase, schema `gtm`)
 
-- `accounts` — target companies (domain, industry, size, ICP tier, source)
-- `contacts` — people at those companies (title, email, email status, persona)
-- `campaigns` — each outbound campaign
-- `outreach_events` — every send, open, reply, bounce, meeting booked
-- `schema_migrations` — tracks which migration files have run
+Never touch the `public` schema: it belongs to an unrelated movies project.
+
+- `gtm.companies` — target companies. Primary key `domain` (case-insensitive `citext`). Design: `docs/schema-companies.md`
+- `gtm.contacts` — one marketing/RevOps leader per company. Primary key `linkedin_url`; `company_domain` → `companies.domain`. Design: `docs/schema-contacts.md`
+- Both keep the full API response in a `raw` jsonb column. No surrogate ID keys.
+- Every schema change is a new numbered file in `db/migrations/`.
 
 ## Before sending anything
 
