@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Checks that every service in .env is reachable and the credentials work.
 # Prints only pass/fail plus non-secret facts (plan, limits). Never prints key values.
-# Usage: bash scripts/probe_connections.sh
+# Usage (from the project folder): bash .claude/skills/<skill>/scripts/probe_connections.sh
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# The project folder is wherever the script is run from.
+ROOT="$(pwd)"
+[ -f "$ROOT/.env" ] || { echo "No .env in $ROOT: run this from the GTM project folder"; exit 1; }
 LOG="$ROOT/logs/probe.log"
 PSQL="$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)"
 

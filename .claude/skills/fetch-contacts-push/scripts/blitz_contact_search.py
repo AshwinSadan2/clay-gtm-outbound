@@ -9,11 +9,11 @@ Two modes, one per run:
 (use 1 with --title).
 
 Single-title example:
-    python3 scripts/blitz_contact_search.py --companies data/processed/companies_blitz_2026-10-19.csv \
+    python3 .claude/skills/fetch-contacts-push/scripts/blitz_contact_search.py --companies data/processed/companies_blitz_2026-10-19.csv \
       --title "Head Partnerships" "Director Partnerships" --exclude-title Intern --location WORLD --limit 10
 
 Cascade example (the approved 2026-10-19 Clay cascade, docs/contact-search-request.md):
-    python3 scripts/blitz_contact_search.py \
+    python3 .claude/skills/fetch-contacts-push/scripts/blitz_contact_search.py \
       --companies data/processed/companies_blitz_2026-10-19.csv \
       --tier "VP Marketing" "Vice President Marketing" "SVP Marketing" "Senior Vice President Marketing" \
              "EVP Marketing" "CMO" "Chief Marketing Officer" "VP Growth" "Vice President Growth" \
@@ -50,7 +50,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# The project folder is wherever the script is run from (the skill folder holds only code).
+ROOT = Path.cwd()
+if not (ROOT / ".env").is_file():
+    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
 WATERFALL_URL = "https://api.blitz-api.ai/v2/search/waterfall-icp-keyword"
 PEOPLE_URL = "https://api.blitz-api.ai/v2/search/people"
 LOG_FILE = ROOT / "logs" / "blitz_contact_search.log"

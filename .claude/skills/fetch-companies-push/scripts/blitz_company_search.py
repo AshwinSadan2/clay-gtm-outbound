@@ -3,9 +3,10 @@
 
 Example (the approved 2026-10-19 Clay request, docs/company-search-request.md):
     FILTERS='--industry "Software Development" --keyword SaaS --employee-range 51-200 --country US'
-    python3 scripts/blitz_company_search.py $FILTERS --limit 10 --dry-run              # show the request, no API call
-    python3 scripts/blitz_company_search.py $FILTERS --limit 10 --page-size 10         # sample
-    python3 scripts/blitz_company_search.py $FILTERS --limit 300 --resume              # scale, continuing after the sample
+    python3 .claude/skills/fetch-companies-push/scripts/blitz_company_search.py $FILTERS --limit 10 --dry-run              # show the request, no API call
+    python3 .claude/skills/fetch-companies-push/scripts/blitz_company_search.py $FILTERS --limit 10 --page-size 10         # sample
+    python3 .claude/skills/fetch-companies-push/scripts/blitz_company_search.py $FILTERS --limit 300 --resume              # scale, continuing after the sample
+Exploring filters: add --probe for one 1-record call that prints how many companies match, saving nothing.
 Each filter flag can be repeated (values are OR'd, as in Blitz): --employee-range 11-50 --employee-range 51-200.
 
 Writes (one run = one date-stamped set):
@@ -28,7 +29,10 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# The project folder is wherever the script is run from (the skill folder holds only code).
+ROOT = Path.cwd()
+if not (ROOT / ".env").is_file():
+    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
 URL = "https://api.blitz-api.ai/v2/search/companies"
 LOG_FILE = ROOT / "logs" / "blitz_company_search.log"
 ERROR_LOG = ROOT / "logs" / "blitz_company_search_errors.log"
@@ -137,15 +141,32 @@ def main():
     parser.add_argument("--country", action="append", required=True,
                         help="HQ country, ISO 2-letter code, e.g. US (repeatable)")
     parser.add_argument("--dry-run", action="store_true", help="print the request body and exit without calling Blitz")
-    parser.add_argument("--limit", type=int, required=True, help="total companies to pull this run")
+    parser.add_argument("--probe", action="store_true",
+                        help="one call returning 1 company (1 record): print the match count and that company, save nothing")
+    parser.add_argument("--limit", type=int, help="total companies to pull this run (required unless --probe)")
     parser.add_argument("--page-size", type=int, default=50, help="results per request (1-50)")
     parser.add_argument("--resume", action="store_true", help="continue from the saved cursor")
     parser.add_argument("--date", default=date.today().isoformat(), help="file date stamp to write/resume")
     args = parser.parse_args()
+    if args.limit is None and not args.probe:
+        parser.error("--limit is required (unless --probe)")
     filters = build_filters(args)
 
     if args.dry_run:
         print(json.dumps({"company": filters, "max_results": min(args.page_size, args.limit)}, indent=2))
+        return
+
+    if args.probe:
+        resp = post(env_get("Blitz_APIKEY"), {"company": filters, "max_results": 1})
+        if resp is None:
+            sys.exit(f"probe failed: see {ERROR_LOG.relative_to(ROOT)}")
+        first = (resp.get("results") or [{}])[0]
+        print(f"total matching: {resp.get('total_results')} | records remaining: "
+              f"{(resp.get('fair_usage') or {}).get('records_remaining')}")
+        if first:
+            row = flatten(first, RAW_CSV_COLUMNS)
+            print("example: " + " | ".join(str(row.get(k)) for k in
+                  ("name", "domain", "industry", "employees_on_linkedin", "hq_country_code", "specialties")))
         return
 
     LOG_FILE.parent.mkdir(exist_ok=True)

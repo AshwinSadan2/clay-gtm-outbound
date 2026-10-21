@@ -46,7 +46,7 @@ Technical vocabulary used throughout the project.
 - **Pooler** — Supabase's **transaction pooler** on port 6543 (`SUPABASE_DB_URL_POOLER`). All data loads go through it; it can't hold prepared statements, so the loader turns them off. Migrations (DDL) use the direct connection on port 5432 (`SUPABASE_DB_URL_DIRECT`).
 - **`gtm` schema** — where all campaign tables live in Supabase. `public` belongs to an unrelated movies project and is never touched.
 - **Natural keys** — no surrogate ID columns. `companies.domain` (case-insensitive `citext`) and `contacts.person_linkedin_url` are the primary keys.
-- **Loader** — `scripts/data.py`: `migrate`, `load-companies`, `load-contacts`, `stats`. Idempotent upserts, one commit per row, bad rows to `logs/data_errors.log`. Contacts load only if their company is already loaded (keeps the foreign key intact) and they have a first name.
+- **Loader** — `data.py` (in each skill's `scripts/`): `migrate`, `load`, `load-companies`, `load-contacts`, `export-companies`, `stats`. Idempotent upserts, one commit per row, bad rows to `logs/data_errors.log`. Contacts load only if their company is already loaded (keeps the foreign key intact) and they have a first name.
 - **Sample load** — sample-before-scale for the database: `--limit 5` loads the first 5 companies, then the 5 contacts belonging to them, for review before the full load.
 - **Raw jsonb** — the `raw` column on `companies` and `contacts` holding the full API response. Our escape valve when APIs add new fields we want later.
 - **Sample-before-scale** — discipline of running every paid-API script on `--limit=10` first and eyeballing the output before running on the full list.

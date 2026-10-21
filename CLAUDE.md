@@ -12,7 +12,7 @@ The owner is not a developer. Explain work in plain English and make technical c
 | `data/raw/` | Files exactly as they came in — never edited | Clay / Apollo / LinkedIn exports, purchased lists |
 | `data/processed/` | Cleaned, deduped, enriched versions of raw files | `accounts_clean_2026-10-19.csv` |
 | `data/exports/` | Final lists ready to load into a sending tool or CRM | `smartlead_upload_tier-a.csv` |
-| `scripts/` | Code that does work: importing, cleaning, enriching, scoring, syncing | `scripts/data.py`, `scripts/score_accounts.py` |
+| `.claude/skills/<skill>/` | Skills and the code they run: `SKILL.md`, `scripts/`, `references/`, `assets/` | `.claude/skills/fetch-companies-push/scripts/data.py` |
 | `db/` | The local SQLite database (`db/gtm.sqlite`, created automatically, not committed) | — |
 | `db/migrations/` | SQL files that create or change database tables, numbered in order | `001_initial_schema.sql`, `002_add_lead_score.sql` |
 | `logs/` | Output from script runs | `logs/data.log` |
@@ -20,10 +20,10 @@ The owner is not a developer. Explain work in plain English and make technical c
 
 ### Rules for placing files
 
-- **Never put data files (CSV, JSON, XLSX) in the root, `docs/` or `scripts/`.** They go in `data/raw`, `data/processed` or `data/exports`.
+- **Never put data files (CSV, JSON, XLSX) in the root, `docs/` or `.claude/skills/`.** They go in `data/raw`, `data/processed` or `data/exports`.
 - **Never edit a file in `data/raw/`.** Write a cleaned copy to `data/processed/` instead.
 - **Name data files with a date:** `<what>_<YYYY-MM-DD>.csv` (e.g. `contacts_clay_2026-10-19.csv`).
-- **Never put markdown/strategy docs in `scripts/` or `data/`.** They go in `docs/`.
+- **Never put markdown/strategy docs in `data/`.** Campaign docs go in `docs/`; a skill's own reference notes go in its `references/`.
 - **Database changes go in a new migration file**, never by editing an old one. Use the next number: `002_...sql`, `003_...sql`.
 - **Scripts write their logs to `logs/`**, not to the terminal only.
 - **Temporary/scratch files** don't belong in this project — use the session scratchpad.
@@ -35,27 +35,28 @@ The owner is not a developer. Explain work in plain English and make technical c
 - Never print, echo or paste `.env` values. When checking `.env`, first look at it masked (`sed -E 's/[A-Za-z0-9]/x/g' .env`), then report only key names and whether they're filled in.
 - `.env`, the database, data files and logs are all in `.gitignore` — prospect data is personal information and must not be committed.
 
-## The data script
+## The two skills (list building)
 
-`scripts/data.py` talks to Supabase. It runs from the project virtualenv (`.venv`, set up from `requirements.txt`):
+All pipeline code lives in two project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
+
+- **`/fetch-companies-push`** (`.claude/skills/fetch-companies-push/`): Blitz company search → `gtm.companies`. Ends by offering the contacts skill.
+- **`/fetch-contacts-push`** (`.claude/skills/fetch-contacts-push/`): reads companies from Supabase → Blitz contact search (title cascade via Waterfall ICP, or a single designation via People Search) → `gtm.contacts`.
+
+The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project, so always run them from the project root.
+
+`data.py` (Supabase loader) and `probe_connections.sh` are identical copies in both skills' `scripts/`. **If you change one, change both.** Loader commands (`.venv/bin/python .claude/skills/<skill>/scripts/data.py ...`):
 
 ```
-.venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations (direct connection)
-.venv/bin/python scripts/data.py load --companies FILE --contacts FILE   # both, companies first (use this)
-.venv/bin/python scripts/data.py load-companies FILE     # upsert into gtm.companies on domain (pooler)
-.venv/bin/python scripts/data.py load-contacts FILE      # upsert into gtm.contacts on person_linkedin_url
-.venv/bin/python scripts/data.py stats                   # row counts, companies without a contact, tiers
+migrate                                  # apply new files in db/migrations (direct connection)
+load --companies FILE --contacts FILE    # both, companies first
+load-companies FILE / load-contacts FILE # upsert into gtm.companies (domain) / gtm.contacts (person_linkedin_url)
+export-companies [--all]                 # companies with no contact yet (--all: every company) → CSV for the contact search
+stats                                    # row counts, companies without a contact, tiers
 ```
 
 Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad rows go to `logs/data_errors.log` and the load carries on. Contacts without a first name are skipped.
 
-**Companies always load before contacts**: each contact links to its company (foreign key), so a contact whose company isn't in `gtm.companies` is skipped with a warning. Tell the user this order before any load; `load` does it automatically. The input files are whatever the latest Blitz pull wrote to `data/processed/`.
-
-## The Blitz pull scripts
-
-`scripts/blitz_company_search.py` and `scripts/blitz_contact_search.py` hold no campaign values: every search filter and the whole title cascade come from flags (`--industry`, `--keyword`, `--employee-range`, `--country`; `--companies`, `--tier`/`--title`, `--exclude-title`, `--tier-exclude`, `--headline-tier`, `--location`). For a new campaign, turn the brief/user answers into flags; don't edit the scripts.
-
-Contacts have two modes. If the user gives a title cascade, pass one `--tier` per tier in priority order (1–10 tiers) → Blitz Waterfall ICP. If they give a single designation (no cascade), pass `--title` → Blitz People Search; those contacts get `icp_tier` 1. Employee Finder is not used: it can't filter by job title. Run with `--dry-run` first to print the exact request for the owner's sign-off. The docstring at the top of each script has the full command for the approved 2026-10-19 Clay run.
+**Companies always load before contacts**: each contact links to its company (foreign key), so a contact whose company isn't in `gtm.companies` is skipped with a warning. Tell the user this order before any load.
 
 ## API fetch rules (every script that calls an external API)
 
@@ -65,7 +66,7 @@ Contacts have two modes. If the user gives a title cascade, pass one `--tier` pe
 
 ## Connection check
 
-`bash scripts/probe_connections.sh` tests Blitz and Supabase (URL, direct DB, pooler DB) and prints pass/fail only, never key values. Run it before any batch job.
+`bash .claude/skills/fetch-companies-push/scripts/probe_connections.sh` tests Blitz and Supabase (URL, direct DB, pooler DB) and prints pass/fail only, never key values. Run it before any batch job.
 
 ## API references
 

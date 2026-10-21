@@ -2,11 +2,12 @@
 """Supabase helper for the GTM project: run migrations and load CSVs into the gtm schema.
 
 Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt):
-    .venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations
-    .venv/bin/python scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
-    .venv/bin/python scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
-    .venv/bin/python scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
-    .venv/bin/python scripts/data.py stats                   # row counts and link checks
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py migrate                 # apply new files in db/migrations
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
+    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py stats                   # row counts and link checks
 
 Loads are upserts, so re-running is safe; unchanged rows are left untouched (updated_at
 only moves when something changed). Each row commits on its own: a bad row is logged to
@@ -22,12 +23,16 @@ import json
 import logging
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 import psycopg
 from psycopg.types.json import Jsonb
 
-ROOT = Path(__file__).resolve().parent.parent
+# The project folder is wherever the script is run from (the skill folder holds only code).
+ROOT = Path.cwd()
+if not (ROOT / ".env").is_file():
+    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
 MIGRATIONS_DIR = ROOT / "db" / "migrations"
 LOG_FILE = ROOT / "logs" / "data.log"
 ERROR_LOG = ROOT / "logs" / "data_errors.log"
@@ -170,6 +175,25 @@ def stats():
         print("contacts by icp_tier         " + ", ".join(f"{t}: {n}" for t, n in tiers))
 
 
+def export_companies(include_with_contact):
+    """Write companies from gtm.companies (by default only those with no contact yet) to a CSV
+    the contact search can read. Returns the file path."""
+    out = ROOT / "data" / "processed" / f"companies_supabase_{date.today().isoformat()}.csv"
+    sql = "select name, domain, linkedin_url from gtm.companies c"
+    if not include_with_contact:
+        sql += " where not exists (select 1 from gtm.contacts p where p.company_domain = c.domain)"
+    rows = 0
+    with connect(pooled=True) as conn, open(out, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["name", "domain", "linkedin_url"])
+        for row in conn.execute(sql + " order by domain"):
+            writer.writerow(row)
+            rows += 1
+    logging.info("exported %d companies%s to %s", rows,
+                 "" if include_with_contact else " without a contact", out.relative_to(ROOT))
+    return out
+
+
 def skip_contact(row, conn):
     if not row["first_name"].strip():
         return "no first name"
@@ -188,11 +212,12 @@ def main():
         handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "stats"])
+    parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "export-companies", "stats"])
     parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts)")
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
+    parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a contact")
     args = parser.parse_args()
     if args.command.startswith("load-") and not args.file:
         parser.error(f"{args.command} needs a CSV file")
@@ -211,6 +236,8 @@ def main():
         load("companies", COMPANY_COLUMNS, "domain", args.file, limit=args.limit)
     elif args.command == "load-contacts":
         load_contacts(args.file, limit=args.limit)
+    elif args.command == "export-companies":
+        export_companies(args.all)
     else:
         stats()
 

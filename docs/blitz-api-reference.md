@@ -4,7 +4,7 @@ Internal reference for BlitzAPI (B2B data: company & people search, enrichment, 
 Source: https://docs.blitz-api.ai (full index: `/llms.txt`, OpenAPI spec: `/api-reference/v2.openapi.json`). Compiled 2026-10-19.
 
 **Our account (as of 2026-10-19):** Startup Trial plan · 988 records remaining · 5 requests/sec per endpoint · resets 2026-11-02.
-Re-check any time with `bash scripts/probe_connections.sh`.
+Re-check any time with `bash .claude/skills/fetch-companies-push/scripts/probe_connections.sh`.
 
 ---
 
