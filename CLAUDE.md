@@ -41,12 +41,15 @@ The owner is not a developer. Explain work in plain English and make technical c
 
 ```
 .venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations (direct connection)
+.venv/bin/python scripts/data.py load --companies FILE --contacts FILE   # both, companies first (use this)
 .venv/bin/python scripts/data.py load-companies FILE     # upsert into gtm.companies on domain (pooler)
 .venv/bin/python scripts/data.py load-contacts FILE      # upsert into gtm.contacts on person_linkedin_url
 .venv/bin/python scripts/data.py stats                   # row counts, companies without a contact, tiers
 ```
 
 Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad rows go to `logs/data_errors.log` and the load carries on. Contacts without a first name are skipped.
+
+**Companies always load before contacts**: each contact links to its company (foreign key), so a contact whose company isn't in `gtm.companies` is skipped with a warning. Tell the user this order before any load; `load` does it automatically. The input files are whatever the latest Blitz pull wrote to `data/processed/`.
 
 ## The Blitz pull scripts
 

@@ -3,6 +3,7 @@
 
 Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt):
     .venv/bin/python scripts/data.py migrate                 # apply new files in db/migrations
+    .venv/bin/python scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
     .venv/bin/python scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
     .venv/bin/python scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
     .venv/bin/python scripts/data.py stats                   # row counts and link checks
@@ -11,6 +12,8 @@ Loads are upserts, so re-running is safe; unchanged rows are left untouched (upd
 only moves when something changed). Each row commits on its own: a bad row is logged to
 logs/data_errors.log and the load carries on. Contacts are skipped if they have no first name
 (decision 2026-10-19: they can't get {FIRST_NAME}) or their company isn't loaded yet.
+ORDER MATTERS: companies first, then contacts. Each contact links to its company (foreign key), so
+a contact whose company isn't loaded is skipped. `load` does both in the right order.
 Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER (transaction pooler, port 6543).
 """
 import argparse
@@ -105,9 +108,11 @@ def to_value(column, value):
 
 def load(table, columns, key, file, skip=None, limit=None):
     """Upsert rows from a CSV. `skip(row, conn)` returns a reason to skip a row, or None.
-    `limit` caps the rows written (inserted + updated + unchanged) this run, for samples."""
+    `limit` caps the rows written (inserted + updated + unchanged) this run, for samples.
+    Returns {skip reason: count}."""
     sql = upsert_sql(table, columns, key)
     inserted = updated = unchanged = skipped = errors = 0
+    reasons = {}
     with connect(pooled=True) as conn, open(file, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if limit is not None and inserted + updated + unchanged >= limit:
@@ -118,6 +123,7 @@ def load(table, columns, key, file, skip=None, limit=None):
             reason = skip(row, conn) if skip else None
             if reason:
                 skipped += 1
+                reasons[reason] = reasons.get(reason, 0) + 1
                 logging.info("skipped %s: %s", row[key], reason)
                 continue
             try:
@@ -137,6 +143,16 @@ def load(table, columns, key, file, skip=None, limit=None):
         table, inserted, updated, unchanged, skipped, errors,
         f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "",
     )
+    return reasons
+
+
+def load_contacts(file, limit=None):
+    logging.info("loading contacts: their companies must already be loaded (companies first, then contacts)")
+    reasons = load("contacts", CONTACT_COLUMNS, "person_linkedin_url", file, skip=skip_contact, limit=limit)
+    missing = reasons.get("company not loaded yet")
+    if missing:
+        logging.warning("%d contacts skipped because their company isn't in gtm.companies. "
+                        "Load the matching companies file first, then re-run this contacts load.", missing)
 
 
 def stats():
@@ -172,19 +188,29 @@ def main():
         handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["migrate", "load-companies", "load-contacts", "stats"])
-    parser.add_argument("file", nargs="?", help="CSV to load (load-* commands)")
+    parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "stats"])
+    parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts)")
+    parser.add_argument("--companies", help="companies CSV (load command)")
+    parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
     args = parser.parse_args()
     if args.command.startswith("load-") and not args.file:
         parser.error(f"{args.command} needs a CSV file")
+    if args.command == "load" and not (args.companies and args.contacts):
+        parser.error("load needs --companies FILE and --contacts FILE")
+    for path in [args.file, args.companies, args.contacts]:
+        if path and not Path(path).is_file():
+            parser.error(f"file not found: {path}")
 
     if args.command == "migrate":
         migrate()
+    elif args.command == "load":
+        load("companies", COMPANY_COLUMNS, "domain", args.companies, limit=args.limit)
+        load_contacts(args.contacts, limit=args.limit)
     elif args.command == "load-companies":
         load("companies", COMPANY_COLUMNS, "domain", args.file, limit=args.limit)
     elif args.command == "load-contacts":
-        load("contacts", CONTACT_COLUMNS, "person_linkedin_url", args.file, skip=skip_contact, limit=args.limit)
+        load_contacts(args.file, limit=args.limit)
     else:
         stats()
 
