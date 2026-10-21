@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
-"""Find the best-matching person at each target company via Blitz Waterfall ICP.
-The title cascade and the companies file come from flags.
+"""Find the best-matching person at each target company. Titles and the companies file come from flags.
 
-Each --tier is one cascade tier, in priority order (first tier with a match wins; its number
-becomes icp_tier). Example (the approved 2026-10-19 Clay cascade, docs/contact-search-request.md):
+Two modes, one per run:
+  --tier ... (repeated)  a title cascade, sent to Blitz Waterfall ICP. Each --tier is one tier, in
+                         priority order (1-10 tiers; first tier with a match wins; its number becomes icp_tier).
+  --title ...            one title list, no cascade, sent to Blitz People Search (icp_tier = 1).
+--exclude-title and --location apply to both. --tier-exclude / --headline-tier take a tier number
+(use 1 with --title).
+
+Single-title example:
+    python3 scripts/blitz_contact_search.py --companies data/processed/companies_blitz_2026-10-19.csv \
+      --title "Head Partnerships" "Director Partnerships" --exclude-title Intern --location WORLD --limit 10
+
+Cascade example (the approved 2026-10-19 Clay cascade, docs/contact-search-request.md):
     python3 scripts/blitz_contact_search.py \
       --companies data/processed/companies_blitz_2026-10-19.csv \
       --tier "VP Marketing" "Vice President Marketing" "SVP Marketing" "Senior Vice President Marketing" \
@@ -42,7 +51,8 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-URL = "https://api.blitz-api.ai/v2/search/waterfall-icp-keyword"
+WATERFALL_URL = "https://api.blitz-api.ai/v2/search/waterfall-icp-keyword"
+PEOPLE_URL = "https://api.blitz-api.ai/v2/search/people"
 LOG_FILE = ROOT / "logs" / "blitz_contact_search.log"
 ERROR_LOG = ROOT / "logs" / "blitz_contact_search_errors.log"
 
@@ -96,10 +106,10 @@ def log_error(code, message, body):
         }) + "\n")
 
 
-def post(api_key, body, limiter, attempts=3):
+def post(api_key, url, body, limiter, label, attempts=3):
     """Return the parsed response, or None after logging the error (never raises)."""
     req = urllib.request.Request(
-        URL,
+        url,
         data=json.dumps(body).encode(),
         headers={"x-api-key": api_key, "Content-Type": "application/json"},
         method="POST",
@@ -117,7 +127,7 @@ def post(api_key, body, limiter, attempts=3):
             return None
         if code in (429, 500, 503) and attempt < attempts:
             wait = 60 if code == 429 else 2 ** attempt
-            logging.warning("HTTP %s for %s, retrying in %ss", code, body["company_linkedin_url"], wait)
+            logging.warning("HTTP %s for %s, retrying in %ss", code, label, wait)
             time.sleep(wait)
             continue
         log_error(code, message, body)
@@ -145,12 +155,12 @@ def flatten(record, columns):
     }
     if results:
         hit = results[0]
-        person = hit.get("person") or {}
+        person = hit.get("person") or hit  # Waterfall wraps the person; People Search returns it bare
         loc = person.get("location") or {}
         job = matched_job(person, company["linkedin_url"])
         row.update({k: person.get(k) for k in columns if k in person})
         row.update(
-            icp_tier=hit.get("icp"),
+            icp_tier=hit.get("icp", 1),  # People Search has no tiers: its one title list is tier 1
             ranking=hit.get("ranking"),
             person_linkedin_url=person.get("linkedin_url"),
             headline=" ".join((person.get("headline") or "").split()),
@@ -183,6 +193,11 @@ def open_csv(path, columns):
 
 
 def build_cascade(args):
+    if len(args.tier) > 10:
+        sys.exit(f"Blitz allows at most 10 tiers, got {len(args.tier)}")
+    for titles in args.tier + [args.exclude_title or []]:
+        if len(titles) > 50:
+            sys.exit(f"Blitz allows at most 50 titles per list, got {len(titles)}: {titles[0]!r}...")
     extra = {}
     for n, *titles in args.tier_exclude or []:
         if not n.isdigit() or not 1 <= int(n) <= len(args.tier):
@@ -201,11 +216,23 @@ def build_cascade(args):
     return cascade
 
 
+def people_search_body(company_url, tier):
+    """The single-title search for one company, from the one-tier cascade."""
+    people = {"job_title": {"include": tier["include_title"], "exclude": tier["exclude_title"],
+                            "include_linkedin_headline": tier.get("include_headline_search", False)}}
+    if "WORLD" not in tier["location"]:
+        people["location"] = {"country_code": tier["location"]}
+    return {"company": {"linkedin_url": [company_url]}, "people": people, "max_results": 1}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--companies", required=True, help="companies CSV to search (name, domain, linkedin_url)")
-    parser.add_argument("--tier", action="append", nargs="+", required=True, metavar="TITLE",
-                        help="titles for one cascade tier; repeat for each tier, highest priority first")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--tier", action="append", nargs="+", metavar="TITLE",
+                      help="titles for one cascade tier; repeat for each tier, highest priority first (Waterfall ICP)")
+    mode.add_argument("--title", nargs="+", metavar="TITLE",
+                      help="one title list, no cascade (People Search)")
     parser.add_argument("--exclude-title", action="extend", nargs="+", metavar="TITLE",
                         help="titles to exclude on every tier")
     parser.add_argument("--tier-exclude", action="append", nargs="+", metavar="N_THEN_TITLES",
@@ -220,10 +247,18 @@ def main():
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rps", type=float, default=4.5, help="request starts per second (plan limit: 5)")
     args = parser.parse_args()
+    if args.title:
+        args.tier = [args.title]
     cascade = build_cascade(args)
 
+    def request(company_url):
+        if args.title:
+            return PEOPLE_URL, people_search_body(company_url, cascade[0])
+        return WATERFALL_URL, {"company_linkedin_url": company_url, "max_results": 1, "cascade": cascade}
+
     if args.dry_run:
-        print(json.dumps({"company_linkedin_url": "<each company>", "max_results": 1, "cascade": cascade}, indent=2))
+        url, body = request("<each company>")
+        print(f"POST {url}\n{json.dumps(body, indent=2)}")
         return
 
     LOG_FILE.parent.mkdir(exist_ok=True)
@@ -252,8 +287,8 @@ def main():
     limiter = RateLimiter(args.rps)
 
     def search(company):
-        body = {"company_linkedin_url": company["linkedin_url"], "max_results": 1, "cascade": cascade}
-        return company, post(api_key, body, limiter)
+        url, body = request(company["linkedin_url"])
+        return company, post(api_key, url, body, limiter, company["linkedin_url"])
 
     found = no_match = errors = 0
     tiers = {}
@@ -276,7 +311,7 @@ def main():
             results = resp.get("results") or []
             if results:
                 found += 1
-                tier = results[0].get("icp")
+                tier = results[0].get("icp", 1)
                 tiers[tier] = tiers.get(tier, 0) + 1
             else:
                 no_match += 1

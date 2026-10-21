@@ -50,7 +50,9 @@ Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad r
 
 ## The Blitz pull scripts
 
-`scripts/blitz_company_search.py` and `scripts/blitz_contact_search.py` hold no campaign values: every search filter and the whole title cascade come from flags (`--industry`, `--keyword`, `--employee-range`, `--country`; `--companies`, `--tier`, `--exclude-title`, `--tier-exclude`, `--headline-tier`, `--location`). For a new campaign, turn the brief/user answers into flags; don't edit the scripts. Run with `--dry-run` first to print the exact request for the owner's sign-off. The docstring at the top of each script has the full command for the approved 2026-10-19 Clay run.
+`scripts/blitz_company_search.py` and `scripts/blitz_contact_search.py` hold no campaign values: every search filter and the whole title cascade come from flags (`--industry`, `--keyword`, `--employee-range`, `--country`; `--companies`, `--tier`/`--title`, `--exclude-title`, `--tier-exclude`, `--headline-tier`, `--location`). For a new campaign, turn the brief/user answers into flags; don't edit the scripts.
+
+Contacts have two modes. If the user gives a title cascade, pass one `--tier` per tier in priority order (1–10 tiers) → Blitz Waterfall ICP. If they give a single designation (no cascade), pass `--title` → Blitz People Search; those contacts get `icp_tier` 1. Employee Finder is not used: it can't filter by job title. Run with `--dry-run` first to print the exact request for the owner's sign-off. The docstring at the top of each script has the full command for the approved 2026-10-19 Clay run.
 
 ## API fetch rules (every script that calls an external API)
 
