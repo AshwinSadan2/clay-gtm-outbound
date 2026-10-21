@@ -48,6 +48,10 @@ The owner is not a developer. Explain work in plain English and make technical c
 
 Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad rows go to `logs/data_errors.log` and the load carries on. Contacts without a first name are skipped.
 
+## The Blitz pull scripts
+
+`scripts/blitz_company_search.py` and `scripts/blitz_contact_search.py` hold no campaign values: every search filter and the whole title cascade come from flags (`--industry`, `--keyword`, `--employee-range`, `--country`; `--companies`, `--tier`, `--exclude-title`, `--tier-exclude`, `--headline-tier`, `--location`). For a new campaign, turn the brief/user answers into flags; don't edit the scripts. Run with `--dry-run` first to print the exact request for the owner's sign-off. The docstring at the top of each script has the full command for the approved 2026-10-19 Clay run.
+
 ## API fetch rules (every script that calls an external API)
 
 1. **Stream, never buffer.** Write each record to disk the moment it arrives (append + flush). Never collect results in memory to write at the end.

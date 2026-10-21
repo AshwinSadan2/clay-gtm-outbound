@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Pull target companies from Blitz Company Search using the approved request.
+"""Pull target companies from Blitz Company Search. The search filters come from flags.
 
-Approved request: docs/company-search-request.md (approved 2026-10-19).
-
-Usage:
-    python3 scripts/blitz_company_search.py --limit 10 --page-size 10   # sample
-    python3 scripts/blitz_company_search.py --limit 300 --resume        # scale, continuing after the sample
+Example (the approved 2026-10-19 Clay request, docs/company-search-request.md):
+    FILTERS='--industry "Software Development" --keyword SaaS --employee-range 51-200 --country US'
+    python3 scripts/blitz_company_search.py $FILTERS --limit 10 --dry-run              # show the request, no API call
+    python3 scripts/blitz_company_search.py $FILTERS --limit 10 --page-size 10         # sample
+    python3 scripts/blitz_company_search.py $FILTERS --limit 300 --resume              # scale, continuing after the sample
+Each filter flag can be repeated (values are OR'd, as in Blitz): --employee-range 11-50 --employee-range 51-200.
 
 Writes (one run = one date-stamped set):
     data/raw/companies_blitz_<date>.jsonl          every company exactly as returned (used for resume/dedup)
     data/raw/companies_blitz_<date>.csv            readable copy of the raw file, every field
     data/raw/companies_blitz_<date>.cursor         cursor to resume from (the next unread page)
+    data/raw/companies_blitz_<date>.filters.json   filters this set was pulled with (resume must match)
     data/processed/companies_blitz_<date>.csv      flattened, one row per company, for review
 Each company costs 1 Blitz record. Run log: logs/blitz_company_search.log.
 Failed calls (code, message, request): logs/blitz_company_search_errors.log.
@@ -30,13 +32,6 @@ ROOT = Path(__file__).resolve().parent.parent
 URL = "https://api.blitz-api.ai/v2/search/companies"
 LOG_FILE = ROOT / "logs" / "blitz_company_search.log"
 ERROR_LOG = ROOT / "logs" / "blitz_company_search_errors.log"
-
-APPROVED_FILTERS = {
-    "industry": {"include": ["Software Development"]},
-    "keywords": {"include": ["SaaS"]},
-    "employee_range": ["51-200"],
-    "hq": {"country_code": ["US"]},
-}
 
 # Readable copy of the raw file: every field Blitz returns, with hq split into columns.
 RAW_CSV_COLUMNS = [
@@ -121,13 +116,37 @@ def open_csv(path, columns):
     return f, writer
 
 
+def build_filters(args):
+    filters = {
+        "industry": {"include": args.industry},
+        "employee_range": args.employee_range,
+        "hq": {"country_code": args.country},
+    }
+    if args.keyword:
+        filters["keywords"] = {"include": args.keyword}
+    return filters
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--industry", action="append", required=True,
+                        help='exact LinkedIn industry string, e.g. "Software Development" (repeatable)')
+    parser.add_argument("--keyword", action="append", help="keyword the company must match, e.g. SaaS (repeatable)")
+    parser.add_argument("--employee-range", action="append", required=True,
+                        help="LinkedIn size band, e.g. 51-200 (repeatable)")
+    parser.add_argument("--country", action="append", required=True,
+                        help="HQ country, ISO 2-letter code, e.g. US (repeatable)")
+    parser.add_argument("--dry-run", action="store_true", help="print the request body and exit without calling Blitz")
     parser.add_argument("--limit", type=int, required=True, help="total companies to pull this run")
     parser.add_argument("--page-size", type=int, default=50, help="results per request (1-50)")
     parser.add_argument("--resume", action="store_true", help="continue from the saved cursor")
     parser.add_argument("--date", default=date.today().isoformat(), help="file date stamp to write/resume")
     args = parser.parse_args()
+    filters = build_filters(args)
+
+    if args.dry_run:
+        print(json.dumps({"company": filters, "max_results": min(args.page_size, args.limit)}, indent=2))
+        return
 
     LOG_FILE.parent.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -139,6 +158,7 @@ def main():
     raw_file = ROOT / "data" / "raw" / f"companies_blitz_{args.date}.jsonl"
     raw_csv_file = raw_file.with_suffix(".csv")
     cursor_file = raw_file.with_suffix(".cursor")
+    filters_file = raw_file.with_suffix(".filters.json")
     csv_file = ROOT / "data" / "processed" / f"companies_blitz_{args.date}.csv"
 
     cursor = None
@@ -148,8 +168,13 @@ def main():
         cursor = cursor_file.read_text().strip() or None
         if cursor is None:
             sys.exit("Saved cursor is empty: all matching companies were already pulled")
+        # A cursor belongs to one search: resuming it with other filters would mix two lists.
+        if filters_file.exists() and json.loads(filters_file.read_text()) != filters:
+            sys.exit(f"Filters differ from the ones this set was pulled with ({filters_file}). "
+                     "Use the same filters to resume, or --date for a new set.")
     elif raw_file.exists():
         sys.exit(f"{raw_file} already exists. Use --resume to continue it, or --date for a new set.")
+    filters_file.write_text(json.dumps(filters, indent=2) + "\n")
 
     api_key = env_get("Blitz_APIKEY")
     seen = set()
@@ -161,7 +186,7 @@ def main():
     csv_out, writer = open_csv(csv_file, CSV_COLUMNS)
     with open(raw_file, "a") as raw_out, raw_csv_out, csv_out:
         while pulled < args.limit:
-            body = {"company": APPROVED_FILTERS, "max_results": min(args.page_size, args.limit - pulled)}
+            body = {"company": filters, "max_results": min(args.page_size, args.limit - pulled)}
             if cursor:
                 body["cursor"] = cursor
             resp = post(api_key, body)

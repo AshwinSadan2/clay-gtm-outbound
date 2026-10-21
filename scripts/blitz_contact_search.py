@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
-"""Find the best marketing / RevOps leader at each target company via Blitz Waterfall ICP.
+"""Find the best-matching person at each target company via Blitz Waterfall ICP.
+The title cascade and the companies file come from flags.
 
-Approved request: docs/contact-search-request.md (approved 2026-10-19).
+Each --tier is one cascade tier, in priority order (first tier with a match wins; its number
+becomes icp_tier). Example (the approved 2026-10-19 Clay cascade, docs/contact-search-request.md):
+    python3 scripts/blitz_contact_search.py \
+      --companies data/processed/companies_blitz_2026-10-19.csv \
+      --tier "VP Marketing" "Vice President Marketing" "SVP Marketing" "Senior Vice President Marketing" \
+             "EVP Marketing" "CMO" "Chief Marketing Officer" "VP Growth" "Vice President Growth" \
+             "VP Demand Generation" "VP Demand Gen" "Vice President Demand Generation" \
+      --tier "Head Marketing" "Head Growth" "Head Demand Generation" "Head Demand Gen" \
+      --tier "Director Marketing" "Director Growth" "Director Demand Generation" "Director Demand Gen" \
+      --tier "VP Revenue Operations" "Vice President Revenue Operations" "Head Revenue Operations" \
+             "Director Revenue Operations" "RevOps" "GTM Engineer" "Go To Market Engineer" \
+      --tier "Founder" "CEO" "Chief Executive Officer" "[Owner]" \
+      --tier "Marketing" "Growth" "Demand Generation" "Demand Gen" "Revenue Operations" \
+      --exclude-title Assistant Intern Junior Coordinator Freelance Brand Communications Content PR "Social Media" \
+      --tier-exclude 5 "Chief of Staff" Advisor \
+      --headline-tier 6 --location WORLD \
+      --limit 10                                # add --dry-run first to see the request without calling Blitz
 
-Usage:
-    python3 scripts/blitz_contact_search.py --limit 10     # sample: first 10 companies not yet done
-    python3 scripts/blitz_contact_search.py                # all remaining companies
-
-Input:  data/processed/companies_blitz_<companies-date>.csv
+Input:  any companies CSV with name, domain and linkedin_url columns (--companies)
 Writes (appended as each company finishes; re-runs skip companies already done):
     data/raw/contacts_blitz_<date>.jsonl         one line per company: our ids + the API response, untouched
     data/raw/contacts_blitz_<date>.csv           readable copy of the raw file, every field
@@ -32,45 +45,6 @@ ROOT = Path(__file__).resolve().parent.parent
 URL = "https://api.blitz-api.ai/v2/search/waterfall-icp-keyword"
 LOG_FILE = ROOT / "logs" / "blitz_contact_search.log"
 ERROR_LOG = ROOT / "logs" / "blitz_contact_search_errors.log"
-
-EXCLUDES = ["Assistant", "Intern", "Junior", "Coordinator", "Freelance",
-            "Brand", "Communications", "Content", "PR", "Social Media"]
-
-APPROVED_CASCADE = [
-    {   # 1 Senior marketing
-        "include_title": [
-            "VP Marketing", "Vice President Marketing", "SVP Marketing", "Senior Vice President Marketing",
-            "EVP Marketing", "CMO", "Chief Marketing Officer",
-            "VP Growth", "Vice President Growth",
-            "VP Demand Generation", "VP Demand Gen", "Vice President Demand Generation",
-        ],
-        "exclude_title": EXCLUDES, "location": ["WORLD"],
-    },
-    {   # 2 Head
-        "include_title": ["Head Marketing", "Head Growth", "Head Demand Generation", "Head Demand Gen"],
-        "exclude_title": EXCLUDES, "location": ["WORLD"],
-    },
-    {   # 3 Director
-        "include_title": ["Director Marketing", "Director Growth", "Director Demand Generation", "Director Demand Gen"],
-        "exclude_title": EXCLUDES, "location": ["WORLD"],
-    },
-    {   # 4 RevOps
-        "include_title": [
-            "VP Revenue Operations", "Vice President Revenue Operations",
-            "Head Revenue Operations", "Director Revenue Operations",
-            "RevOps", "GTM Engineer", "Go To Market Engineer",
-        ],
-        "exclude_title": EXCLUDES, "location": ["WORLD"],
-    },
-    {   # 5 Founder fallback
-        "include_title": ["Founder", "CEO", "Chief Executive Officer", "[Owner]"],
-        "exclude_title": EXCLUDES + ["Chief of Staff", "Advisor"], "location": ["WORLD"],
-    },
-    {   # 6 Manager / IC + headline catch-all
-        "include_title": ["Marketing", "Growth", "Demand Generation", "Demand Gen", "Revenue Operations"],
-        "exclude_title": EXCLUDES, "location": ["WORLD"], "include_headline_search": True,
-    },
-]
 
 RAW_CSV_COLUMNS = [
     "company_name", "company_domain", "company_linkedin_url", "status", "icp_tier", "ranking",
@@ -208,14 +182,49 @@ def open_csv(path, columns):
     return f, writer
 
 
+def build_cascade(args):
+    extra = {}
+    for n, *titles in args.tier_exclude or []:
+        if not n.isdigit() or not 1 <= int(n) <= len(args.tier):
+            sys.exit(f"--tier-exclude needs a tier number (1-{len(args.tier)}) first, got {n!r}")
+        extra.setdefault(int(n), []).extend(titles)
+    for n in args.headline_tier or []:
+        if not 1 <= n <= len(args.tier):
+            sys.exit(f"--headline-tier {n}: there are only {len(args.tier)} tiers")
+    cascade = []
+    for i, titles in enumerate(args.tier, 1):
+        tier = {"include_title": titles, "exclude_title": (args.exclude_title or []) + extra.get(i, []),
+                "location": args.location}
+        if i in (args.headline_tier or []):
+            tier["include_headline_search"] = True
+        cascade.append(tier)
+    return cascade
+
+
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--companies", required=True, help="companies CSV to search (name, domain, linkedin_url)")
+    parser.add_argument("--tier", action="append", nargs="+", required=True, metavar="TITLE",
+                        help="titles for one cascade tier; repeat for each tier, highest priority first")
+    parser.add_argument("--exclude-title", action="extend", nargs="+", metavar="TITLE",
+                        help="titles to exclude on every tier")
+    parser.add_argument("--tier-exclude", action="append", nargs="+", metavar="N_THEN_TITLES",
+                        help="extra excludes for one tier only: tier number, then titles")
+    parser.add_argument("--headline-tier", action="append", type=int, metavar="N",
+                        help="also search the LinkedIn headline on this tier (repeatable)")
+    parser.add_argument("--location", action="extend", nargs="+", required=True,
+                        help="contact location, e.g. WORLD or US")
+    parser.add_argument("--dry-run", action="store_true", help="print the request body and exit without calling Blitz")
     parser.add_argument("--limit", type=int, help="max companies to process this run (default: all remaining)")
-    parser.add_argument("--companies-date", default="2026-10-19", help="date stamp of the companies CSV")
     parser.add_argument("--date", default=date.today().isoformat(), help="file date stamp to write/resume")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rps", type=float, default=4.5, help="request starts per second (plan limit: 5)")
     args = parser.parse_args()
+    cascade = build_cascade(args)
+
+    if args.dry_run:
+        print(json.dumps({"company_linkedin_url": "<each company>", "max_results": 1, "cascade": cascade}, indent=2))
+        return
 
     LOG_FILE.parent.mkdir(exist_ok=True)
     logging.basicConfig(
@@ -224,7 +233,7 @@ def main():
         handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
     )
 
-    companies_csv = ROOT / "data" / "processed" / f"companies_blitz_{args.companies_date}.csv"
+    companies_csv = Path(args.companies)
     raw_file = ROOT / "data" / "raw" / f"contacts_blitz_{args.date}.jsonl"
     raw_csv_file = raw_file.with_suffix(".csv")
     csv_file = ROOT / "data" / "processed" / f"contacts_blitz_{args.date}.csv"
@@ -243,7 +252,7 @@ def main():
     limiter = RateLimiter(args.rps)
 
     def search(company):
-        body = {"company_linkedin_url": company["linkedin_url"], "max_results": 1, "cascade": APPROVED_CASCADE}
+        body = {"company_linkedin_url": company["linkedin_url"], "max_results": 1, "cascade": cascade}
         return company, post(api_key, body, limiter)
 
     found = no_match = errors = 0
