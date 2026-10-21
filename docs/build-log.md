@@ -4,6 +4,89 @@ Running record of what was built, decided and run in this project, newest sessio
 
 ---
 
+## Session 2 — 2026-10-21 · Parameterised pipeline, skills, Attio suppression
+
+**Goal:** make the session-1 engine reusable for any campaign without code changes, package it as skills, and build CRM suppression from Attio.
+**Outcome:** ✅ Two working skills (`/fetch-companies-push`, `/fetch-contacts-push`). ✅ Suppression scripts built and checked live (`.claude/skills/suppress-crm/scripts/`); the skill wrapper (`SKILL.md`) is still to do. No database rows changed. Blitz: 394 → **388** records (6 spent on live tests).
+
+### What was built
+
+| Area | Files |
+|---|---|
+| Company pull, parameterised | `blitz_company_search.py`: `--industry`, `--keyword`, `--employee-range`, `--country` (all repeatable, required) · `--dry-run` · `--probe` (1-record match count, saves nothing) · resume refuses changed filters (`.filters.json`) |
+| Contact pull, parameterised | `blitz_contact_search.py`: `--companies FILE` · `--tier` ×1–10 (Waterfall ICP) **or** `--title` (People Search, `icp_tier` 1) · `--exclude-title`, `--tier-exclude N`, `--headline-tier N`, `--location` · `--dry-run` |
+| Loader | `data.py`: `load --companies --contacts` (always companies first) · `export-companies [--all]` (companies with no contact → CSV for the contact search) · warning when contacts skip for a missing company |
+| Database | `db/migrations/003_contacts_icp_tier_up_to_10.sql`: `icp_tier` check widened 1–6 → 1–10 (applied) |
+| Skills | `.claude/skills/fetch-companies-push/` and `fetch-contacts-push/`: `SKILL.md` (109 / 113 lines) + `scripts/` + `references/` (filter rules, title-matching rules, push rules, **535 Blitz industry strings**) + `assets/` (intake questions, Clay worked examples) |
+| Portability | Scripts treat the run folder as the project, accept `--env PATH`, and create `data/` / `logs/` if missing. `scripts/` folder retired: code lives in the skills; `data.py` and `probe_connections.sh` are identical copies per skill |
+| Attio | `ATTIO_API_KEY` in `.env` / `.env.template` (read-only scopes) · `probe_connections.sh` now checks Attio too |
+| Suppression | `.claude/skills/suppress-crm/scripts/`: `attio_profile.py` → `attio_download.py` → `attio_suppress.py` (preview by default, `--apply` writes) + shared `attio_common.py` |
+
+### Timeline
+
+| Time | Step | Result |
+|---|---|---|
+| ~07:10 | Profiled the 3 scripts; listed the hard-coded values | user: flags, not config files; change the engine as little as possible |
+| 07:18 | Company filters + contact cascade → flags | flag-built requests checked **identical** to the approved 2026-10-19 ones |
+| 07:22 | Contact modes: cascade (1–10 tiers) or single title; migration 003 applied | Employee Finder rejected: it can't filter by job title |
+| 07:24 | Loader: ordered `load`, missing-company warning | re-load of 300 + 287 = all unchanged |
+| 07:32 | Validation round 1: compile · network · live calls | all ✅ (3 Blitz records; test outputs in a throwaway folder) |
+| 07:46 | Split into two skills | re-validated live from the new location (2 records) |
+| 07:54 | `--env` flag + auto-created folders | tested from an empty folder (1 record) |
+| 07:55 | Attio key added; probe | active, workspace *Bootprint-CEM*, read-only scopes |
+| ~08:00 | Full CRM profile + overlap with our 300 | 30 CRM domains hit a rule; **18 of our 300** |
+| 08:06 | First suppression CSV + raw Attio copy + opt-out file | `suppression_attio_2026-10-21.csv` (30 rows) |
+| 08:22 | Suppression script: categories, levels, modes as flags | offline-tested against the saved raw pull |
+| 08:26 | Split into 3 staged scripts; `in_conversation`; email-only contact level | offline + synthetic tests ✅ |
+| 08:29 | Validation round 2 (suppression): compile · network (+ Attio) · live | all ✅: 18 suppressed / 282 clean; contact level vs Supabase correctly refused (no emails yet) |
+
+### Key decisions
+
+| Decision | Why |
+|---|---|
+| Campaign values are CLI flags, never config files | An agent always runs the pipeline and turns the brief/user answers into flags; the proven engine stays untouched |
+| Filter flags have no defaults | A forgotten flag must stop the run, not silently reuse the Clay filters |
+| Single designation → People Search, not Employee Finder | Employee Finder filters only by level / department, not job title |
+| Contacts skill reads companies from Supabase (`export-companies`) | Every contact found then has its company loaded, so the FK can't break |
+| Skills ask before pushing to Supabase | User sign-off on every write |
+| Suppression at **company-domain level**, before contact/email spend | Spend money only on companies we'd actually talk to |
+| Categories: customer · competitor · do-not-recontact (all no time limit) · closed-lost (**all Lost, no limit**: Attio has no close date, every record dated 2026-08-10 import) · lead · in progress (while open) · recently contacted · in conversation (`--days`, default 90) · opted out (contact level only) | User's rules |
+| Contact level matches on **email only, both sides**; never runs without emails; no-email rows → `_unchecked` | User's rule: never join on LinkedIn URL |
+| `in_conversation` holds the whole company at domain level | If an SDR is talking to someone there, no company-level outbound |
+| Contact level: people inherit their company's customer / competitor / recently-contacted status | 31 people, all at customers, 30 of them on the Won deal |
+| Suppression output is CSV only | Database never changed by suppression |
+| Skill folder named `suppress-crm` | Handles companies and contacts |
+
+### Final state
+
+| | |
+|---|---|
+| `gtm.companies` / `gtm.contacts` | 300 / 287, unchanged |
+| Blitz records | **388 left**, resets 2026-11-02 |
+| Attio | 72 companies · 75 people · 25 deals · lists: Customers 10, Active Pipeline 8, Newsletter Unsubscribes 3 |
+| Suppression vs our 300 (domain, all categories, 90 d) | **18 suppressed** (7 customer · 1 competitor · 1 do-not-recontact · 3 closed-lost · 4 in progress · 2 recently contacted) · 282 clean · 17 of the 18 already have a contact |
+| Data files (git-ignored) | `data/raw/attio_*_2026-10-21.jsonl` · `data/processed/suppression_attio_2026-10-21.csv`, `optout_attio_2026-10-21.csv`, `companies_supabase_2026-10-21.csv` |
+
+### Issues hit and how they were handled
+
+- **Hard-coded `--companies-date 2026-10-19`** in the contact script → replaced by `--companies FILE`.
+- **`icp_tier` capped at 6** in the database → migration 003 (1–10) before any longer cascade could load.
+- **Inline comment in `.env.template`** would have become the key's value if copied → moved onto its own line.
+- **Stray space before the Attio key** in `.env` → removed without displaying the value.
+- **Attio dates are import dates**: every record and deal stage is dated 2026-08-10, so closed-lost can't be windowed. Decision: suppress all Lost.
+- **Attio interaction fields empty** (no mailbox/calendar sync); notes, tasks, threads and meetings are out of the key's scope → `in_conversation` is built but matches nobody yet.
+- **Deal owner names** need the Attio *User Management: read* scope → only the owner ID is kept for now.
+- **Blitz reference path** given by the user was on another machine → used Blitz's live OpenAPI spec instead.
+
+### Next session
+
+1. **Wrap `suppress-crm`** as a skill: `SKILL.md` (ask level, categories and `--days` → profile → download → ask target, CSV or Supabase → preview inline → sign-off → `--apply`), plus `references/` and `assets/`. Then hook it into `fetch-companies-push` after the push.
+2. **Feed the clean list onward**: the contact skill should skip suppressed domains (today it reads `export-companies`).
+3. **Email enrichment** (Icypeas) → `email_*` columns via migration **004** (003 is used). This also unlocks contact-level suppression.
+4. Optional Attio scopes: *User Management: read* (deal owner names); mailbox/calendar sync (`in_conversation`).
+
+---
+
 ## Session 1 — 2026-10-19 · List building (Blitz → Supabase)
 
 **Goal:** stand up the project and build the Clay target list: US SaaS companies (51–200) and the best marketing / RevOps leader at each, stored in Supabase.
