@@ -6,7 +6,7 @@ Writes (date stamp = --date, default today):
     data/processed/suppression_attio_<level>_<date>.csv   one row per suppressed domain (domain level) or person (contact level)
 
 Usage (from the project folder; use the flags signed off at stage 1):
-    .venv/bin/python .claude/skills/suppress-companies/scripts/attio_download.py \
+    .venv/bin/python .claude/skills/suppress-crm/scripts/attio_download.py \
         --level domain --categories all --days 90
 
 Next stage: attio_suppress.py (preview first, then --apply).

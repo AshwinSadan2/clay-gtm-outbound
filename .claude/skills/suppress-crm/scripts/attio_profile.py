@@ -5,9 +5,9 @@ Counts each chosen category. Categories with few entries list them (companies by
 people by job title and company); big ones show counts only (--detail-threshold).
 
 Usage (from the project folder):
-    .venv/bin/python .claude/skills/suppress-companies/scripts/attio_profile.py \
+    .venv/bin/python .claude/skills/suppress-crm/scripts/attio_profile.py \
         --level domain --categories all --days 90
-    .venv/bin/python .claude/skills/suppress-companies/scripts/attio_profile.py \
+    .venv/bin/python .claude/skills/suppress-crm/scripts/attio_profile.py \
         --level contact --categories customer pipeline_lead pipeline_in_progress opted_out --days 120
 
 Next stage: attio_download.py with the same flags.
