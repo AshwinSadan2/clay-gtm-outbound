@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks that every service in .env is reachable and the credentials work.
+# Checks that every service in .env (Blitz, Attio, Supabase) is reachable and the credentials work.
 # Prints only pass/fail plus non-secret facts (plan, limits). Never prints key values.
 # Usage (from the project folder): bash .claude/skills/<skill>/scripts/probe_connections.sh [--env PATH]
 set -uo pipefail
@@ -30,6 +30,21 @@ else
     log "BLITZ      OK    $facts"
   else
     log "BLITZ      FAIL  HTTP $code"
+  fi
+fi
+
+# --- Attio CRM (read-only key; suppression) ---
+ATTIO_KEY="$(env_get ATTIO_API_KEY)"
+if [ -z "$ATTIO_KEY" ]; then
+  log "ATTIO      FAIL  ATTIO_API_KEY missing from .env"
+else
+  body="$(curl -s -m 10 -w '\n%{http_code}' https://api.attio.com/v2/self -H "Authorization: Bearer $ATTIO_KEY")"
+  code="$(tail -1 <<<"$body")"
+  if [ "$code" = "200" ]; then
+    facts="$(sed '$d' <<<"$body" | jq -r '"active=\(.active) workspace=\(.workspace_name) scopes=\(.scope)"')"
+    log "ATTIO      OK    $facts"
+  else
+    log "ATTIO      FAIL  HTTP $code"
   fi
 fi
 
