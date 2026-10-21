@@ -31,8 +31,7 @@ from psycopg.types.json import Jsonb
 
 # The project folder is wherever the script is run from (the skill folder holds only code).
 ROOT = Path.cwd()
-if not (ROOT / ".env").is_file():
-    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
+ENV_FILE = ROOT / ".env"  # --env overrides
 MIGRATIONS_DIR = ROOT / "db" / "migrations"
 LOG_FILE = ROOT / "logs" / "data.log"
 ERROR_LOG = ROOT / "logs" / "data_errors.log"
@@ -47,7 +46,9 @@ INTEGER_COLUMNS = {"employees_on_linkedin", "icp_tier"}
 
 
 def env_get(key):
-    for line in (ROOT / ".env").read_text().splitlines():
+    if not ENV_FILE.is_file():
+        sys.exit(f"No .env at {ENV_FILE}: run from the project folder or pass --env PATH")
+    for line in ENV_FILE.read_text().splitlines():
         if line.startswith(key + "="):
             return line.split("=", 1)[1].strip()
     sys.exit(f"{key} missing from .env")
@@ -179,6 +180,7 @@ def export_companies(include_with_contact):
     """Write companies from gtm.companies (by default only those with no contact yet) to a CSV
     the contact search can read. Returns the file path."""
     out = ROOT / "data" / "processed" / f"companies_supabase_{date.today().isoformat()}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
     sql = "select name, domain, linkedin_url from gtm.companies c"
     if not include_with_contact:
         sql += " where not exists (select 1 from gtm.contacts p where p.company_domain = c.domain)"
@@ -217,8 +219,12 @@ def main():
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
+    parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a contact")
     args = parser.parse_args()
+    global ENV_FILE
+    if args.env:
+        ENV_FILE = Path(args.env).expanduser().resolve()
     if args.command.startswith("load-") and not args.file:
         parser.error(f"{args.command} needs a CSV file")
     if args.command == "load" and not (args.companies and args.contacts):

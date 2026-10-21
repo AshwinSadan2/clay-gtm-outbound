@@ -8,7 +8,9 @@ description: Find one contact per company already in Supabase gtm.companies via 
 Finds the best-matching person at each company in `gtm.companies` and loads them into `gtm.contacts`.
 Titles, excludes and location are all flags. **Never edit the scripts for a campaign.**
 
-Everything runs from the project folder. Shorthand used below:
+Everything runs from the project folder: outputs go to its `data/` and `logs/`, which are created if missing,
+and secrets come from its `.env`. If the `.env` lives elsewhere, add `--env PATH` to every command.
+Shorthand used below:
 ```bash
 S=.claude/skills/fetch-contacts-push/scripts
 PY=.venv/bin/python

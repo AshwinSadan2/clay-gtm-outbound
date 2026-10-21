@@ -31,8 +31,7 @@ from pathlib import Path
 
 # The project folder is wherever the script is run from (the skill folder holds only code).
 ROOT = Path.cwd()
-if not (ROOT / ".env").is_file():
-    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
+ENV_FILE = ROOT / ".env"  # --env overrides
 URL = "https://api.blitz-api.ai/v2/search/companies"
 LOG_FILE = ROOT / "logs" / "blitz_company_search.log"
 ERROR_LOG = ROOT / "logs" / "blitz_company_search_errors.log"
@@ -53,7 +52,9 @@ CSV_COLUMNS = [
 
 
 def env_get(key):
-    for line in (ROOT / ".env").read_text().splitlines():
+    if not ENV_FILE.is_file():
+        sys.exit(f"No .env at {ENV_FILE}: run from the project folder or pass --env PATH")
+    for line in ENV_FILE.read_text().splitlines():
         if line.startswith(key + "="):
             return line.split("=", 1)[1].strip()
     sys.exit(f"{key} missing from .env")
@@ -61,6 +62,7 @@ def env_get(key):
 
 def log_error(code, message, body):
     """Append one failed call to the error log for review after the run."""
+    ERROR_LOG.parent.mkdir(exist_ok=True)
     with open(ERROR_LOG, "a") as f:
         f.write(json.dumps({
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -141,6 +143,7 @@ def main():
     parser.add_argument("--country", action="append", required=True,
                         help="HQ country, ISO 2-letter code, e.g. US (repeatable)")
     parser.add_argument("--dry-run", action="store_true", help="print the request body and exit without calling Blitz")
+    parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     parser.add_argument("--probe", action="store_true",
                         help="one call returning 1 company (1 record): print the match count and that company, save nothing")
     parser.add_argument("--limit", type=int, help="total companies to pull this run (required unless --probe)")
@@ -150,6 +153,9 @@ def main():
     args = parser.parse_args()
     if args.limit is None and not args.probe:
         parser.error("--limit is required (unless --probe)")
+    global ENV_FILE
+    if args.env:
+        ENV_FILE = Path(args.env).expanduser().resolve()
     filters = build_filters(args)
 
     if args.dry_run:
@@ -181,6 +187,8 @@ def main():
     cursor_file = raw_file.with_suffix(".cursor")
     filters_file = raw_file.with_suffix(".filters.json")
     csv_file = ROOT / "data" / "processed" / f"companies_blitz_{args.date}.csv"
+    for d in (raw_file.parent, csv_file.parent):
+        d.mkdir(parents=True, exist_ok=True)
 
     cursor = None
     if args.resume:

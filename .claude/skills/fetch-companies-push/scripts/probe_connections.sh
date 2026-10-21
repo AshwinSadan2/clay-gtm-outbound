@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Checks that every service in .env is reachable and the credentials work.
 # Prints only pass/fail plus non-secret facts (plan, limits). Never prints key values.
-# Usage (from the project folder): bash .claude/skills/<skill>/scripts/probe_connections.sh
+# Usage (from the project folder): bash .claude/skills/<skill>/scripts/probe_connections.sh [--env PATH]
 set -uo pipefail
 
 # The project folder is wherever the script is run from.
 ROOT="$(pwd)"
-[ -f "$ROOT/.env" ] || { echo "No .env in $ROOT: run this from the GTM project folder"; exit 1; }
+ENV_FILE="$ROOT/.env"
+[ "${1:-}" = "--env" ] && ENV_FILE="${2:?--env needs a path}"
+[ -f "$ENV_FILE" ] || { echo "No .env at $ENV_FILE: run from the project folder or pass --env PATH"; exit 1; }
+mkdir -p "$ROOT/logs"
 LOG="$ROOT/logs/probe.log"
 PSQL="$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)"
 
 # Read one KEY=value from .env without echoing it.
-env_get() { grep -E "^$1=" "$ROOT/.env" | head -1 | cut -d= -f2-; }
+env_get() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2-; }
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$LOG"; }
 

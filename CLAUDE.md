@@ -42,7 +42,7 @@ All pipeline code lives in two project skills, each with `SKILL.md`, `scripts/`,
 - **`/fetch-companies-push`** (`.claude/skills/fetch-companies-push/`): Blitz company search → `gtm.companies`. Ends by offering the contacts skill.
 - **`/fetch-contacts-push`** (`.claude/skills/fetch-contacts-push/`): reads companies from Supabase → Blitz contact search (title cascade via Waterfall ICP, or a single designation via People Search) → `gtm.contacts`.
 
-The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project, so always run them from the project root.
+The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project (creating `data/` and `logs/` if missing) and read `.env` from it, so run them from the project root. Every script, including `probe_connections.sh`, takes `--env PATH` for a `.env` stored elsewhere.
 
 `data.py` (Supabase loader) and `probe_connections.sh` are identical copies in both skills' `scripts/`. **If you change one, change both.** Loader commands (`.venv/bin/python .claude/skills/<skill>/scripts/data.py ...`):
 

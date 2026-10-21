@@ -52,8 +52,7 @@ from pathlib import Path
 
 # The project folder is wherever the script is run from (the skill folder holds only code).
 ROOT = Path.cwd()
-if not (ROOT / ".env").is_file():
-    sys.exit(f"No .env in {ROOT}: run this from the GTM project folder")
+ENV_FILE = ROOT / ".env"  # --env overrides
 WATERFALL_URL = "https://api.blitz-api.ai/v2/search/waterfall-icp-keyword"
 PEOPLE_URL = "https://api.blitz-api.ai/v2/search/people"
 LOG_FILE = ROOT / "logs" / "blitz_contact_search.log"
@@ -93,7 +92,9 @@ class RateLimiter:
 
 
 def env_get(key):
-    for line in (ROOT / ".env").read_text().splitlines():
+    if not ENV_FILE.is_file():
+        sys.exit(f"No .env at {ENV_FILE}: run from the project folder or pass --env PATH")
+    for line in ENV_FILE.read_text().splitlines():
         if line.startswith(key + "="):
             return line.split("=", 1)[1].strip()
     sys.exit(f"{key} missing from .env")
@@ -245,11 +246,15 @@ def main():
     parser.add_argument("--location", action="extend", nargs="+", required=True,
                         help="contact location, e.g. WORLD or US")
     parser.add_argument("--dry-run", action="store_true", help="print the request body and exit without calling Blitz")
+    parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     parser.add_argument("--limit", type=int, help="max companies to process this run (default: all remaining)")
     parser.add_argument("--date", default=date.today().isoformat(), help="file date stamp to write/resume")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rps", type=float, default=4.5, help="request starts per second (plan limit: 5)")
     args = parser.parse_args()
+    global ENV_FILE
+    if args.env:
+        ENV_FILE = Path(args.env).expanduser().resolve()
     if args.title:
         args.tier = [args.title]
     cascade = build_cascade(args)
@@ -275,6 +280,8 @@ def main():
     raw_file = ROOT / "data" / "raw" / f"contacts_blitz_{args.date}.jsonl"
     raw_csv_file = raw_file.with_suffix(".csv")
     csv_file = ROOT / "data" / "processed" / f"contacts_blitz_{args.date}.csv"
+    for d in (raw_file.parent, csv_file.parent):
+        d.mkdir(parents=True, exist_ok=True)
 
     with open(companies_csv, newline="") as f:
         companies = [{k: r[k] for k in ("name", "domain", "linkedin_url")} for r in csv.DictReader(f)]

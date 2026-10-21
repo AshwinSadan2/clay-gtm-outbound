@@ -9,7 +9,9 @@ Builds a target company list from Blitz and loads it into `gtm.companies`. The s
 values: every filter is a flag. **Never edit the scripts for a campaign.** If a brief needs a filter
 the flags don't cover, tell the user.
 
-Everything runs from the project folder. Shorthand used below:
+Everything runs from the project folder: outputs go to its `data/` and `logs/`, which are created if missing,
+and secrets come from its `.env`. If the `.env` lives elsewhere, add `--env PATH` to every command.
+Shorthand used below:
 ```bash
 S=.claude/skills/fetch-companies-push/scripts
 PY=.venv/bin/python
