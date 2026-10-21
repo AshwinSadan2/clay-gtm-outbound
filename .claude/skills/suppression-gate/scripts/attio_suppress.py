@@ -14,7 +14,7 @@ exactly what would be suppressed, writing nothing but the Supabase download. Wit
     data/processed/<target>_unchecked_<date>.csv    contact level only: rows with no email (not checked)
 
 Usage (from the project folder):
-    S=.claude/skills/suppress-crm/scripts
+    S=.claude/skills/suppression-gate/scripts
     .venv/bin/python $S/attio_suppress.py --level domain --target-supabase              # preview
     .venv/bin/python $S/attio_suppress.py --level domain --target-supabase --apply      # after sign-off
     .venv/bin/python $S/attio_suppress.py --level contact --target-csv leads.csv --email-column "Work Email"

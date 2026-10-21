@@ -4,10 +4,10 @@ Running record of what was built, decided and run in this project, newest sessio
 
 ---
 
-## Session 2 — 2026-10-21 · Parameterised pipeline, skills, Attio suppression
+## Session 2 — 2026-10-21 · Parameterised pipeline, three skills, Attio suppression gate
 
 **Goal:** make the session-1 engine reusable for any campaign without code changes, package it as skills, and build CRM suppression from Attio.
-**Outcome:** ✅ Two working skills (`/fetch-companies-push`, `/fetch-contacts-push`). ✅ Suppression scripts built and checked live (`.claude/skills/suppress-crm/scripts/`); the skill wrapper (`SKILL.md`) is still to do. No database rows changed. Blitz: 394 → **388** records (6 spent on live tests).
+**Outcome:** ✅ Three local skills: `/fetch-companies-push`, `/fetch-contacts-push`, `/suppression-gate`. All scripts checked live (compile · network · provider). No database rows changed. Blitz: 394 → **388** records (6 spent on live tests).
 
 ### What was built
 
@@ -20,7 +20,8 @@ Running record of what was built, decided and run in this project, newest sessio
 | Skills | `.claude/skills/fetch-companies-push/` and `fetch-contacts-push/`: `SKILL.md` (109 / 113 lines) + `scripts/` + `references/` (filter rules, title-matching rules, push rules, **535 Blitz industry strings**) + `assets/` (intake questions, Clay worked examples) |
 | Portability | Scripts treat the run folder as the project, accept `--env PATH`, and create `data/` / `logs/` if missing. `scripts/` folder retired: code lives in the skills; `data.py` and `probe_connections.sh` are identical copies per skill |
 | Attio | `ATTIO_API_KEY` in `.env` / `.env.template` (read-only scopes) · `probe_connections.sh` now checks Attio too |
-| Suppression | `.claude/skills/suppress-crm/scripts/`: `attio_profile.py` → `attio_download.py` → `attio_suppress.py` (preview by default, `--apply` writes) + shared `attio_common.py` |
+| Suppression scripts | `attio_profile.py` → `attio_download.py` → `attio_suppress.py` (preview by default, `--apply` writes) + shared `attio_common.py` |
+| Suppression skill | `.claude/skills/suppression-gate/`: `SKILL.md` (109 lines) · own `.env.template` (keys it needs, no values) · `references/` (categories + levels + matching; Attio fields and known gaps) · `assets/` (intake questions + sign-off wording; worked example with today's numbers) · `scripts/` |
 
 ### Timeline
 
@@ -39,6 +40,8 @@ Running record of what was built, decided and run in this project, newest sessio
 | 08:22 | Suppression script: categories, levels, modes as flags | offline-tested against the saved raw pull |
 | 08:26 | Split into 3 staged scripts; `in_conversation`; email-only contact level | offline + synthetic tests ✅ |
 | 08:29 | Validation round 2 (suppression): compile · network (+ Attio) · live | all ✅: 18 suppressed / 282 clean; contact level vs Supabase correctly refused (no emails yet) |
+| ~08:35 | Session commits pushed to GitHub | |
+| ~08:40 | Wrapped as local skill **`suppression-gate`** (renamed from `suppress-crm`) with its own `.env.template` | `SKILL.md` 109 lines; live stage-1 run from the new path = 30 domains |
 
 ### Key decisions
 
@@ -55,7 +58,8 @@ Running record of what was built, decided and run in this project, newest sessio
 | `in_conversation` holds the whole company at domain level | If an SDR is talking to someone there, no company-level outbound |
 | Contact level: people inherit their company's customer / competitor / recently-contacted status | 31 people, all at customers, 30 of them on the Won deal |
 | Suppression output is CSV only | Database never changed by suppression |
-| Skill folder named `suppress-crm` | Handles companies and contacts |
+| Skill named **`suppression-gate`**, a local project skill with its own `.env.template` | User's choice; it gates the list before enrichment spend, at company or contact level |
+| Skill flow: preflight → ask level, categories, window → profile → sign-off → download → ask target (CSV or Supabase) → preview → sign-off → `--apply` | Every stage is a user gate; profile shows details when small and counts when big |
 
 ### Final state
 
@@ -80,7 +84,7 @@ Running record of what was built, decided and run in this project, newest sessio
 
 ### Next session
 
-1. **Wrap `suppress-crm`** as a skill: `SKILL.md` (ask level, categories and `--days` → profile → download → ask target, CSV or Supabase → preview inline → sign-off → `--apply`), plus `references/` and `assets/`. Then hook it into `fetch-companies-push` after the push.
+1. **Run `/suppression-gate` end to end** as a skill (so far only its scripts have run live), then hook it into `fetch-companies-push` after the push.
 2. **Feed the clean list onward**: the contact skill should skip suppressed domains (today it reads `export-companies`).
 3. **Email enrichment** (Icypeas) → `email_*` columns via migration **004** (003 is used). This also unlocks contact-level suppression.
 4. Optional Attio scopes: *User Management: read* (deal owner names); mailbox/calendar sync (`in_conversation`).
