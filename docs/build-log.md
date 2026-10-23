@@ -4,6 +4,84 @@ Running record of what was built, decided and run in this project, newest sessio
 
 ---
 
+## Session 3 — 2026-10-23 · Icypeas email enrichment, migration 004, `icypeas-email-fetch` skill
+
+**Goal:** find work emails for the clean contact list with Icypeas, store them permanently in Supabase, and package the flow as a skill.
+**Outcome:** ✅ 155 of 270 clean contacts searched: **115 emails found (74%)**, 40 not found, 0 errors, all loaded to `gtm.contacts`. Migration 004 applied. New skill `/icypeas-email-fetch`. 115 contacts left for the skill's first real run.
+
+### What was built
+
+| Area | Files |
+|---|---|
+| Keys | `ICYPEAS_API_KEY`, `ICYPEAS_API_SECRET` in `.env` / `.env.template` |
+| API reference | `docs/icypeas-api-reference.md` (9 points; polling limits; confirmed live against a real response) · copy in the skill's `references/` |
+| Clean contact list | `data/processed/contacts_clean_2026-10-23.csv`: 287 contacts − 17 at suppressed companies = **270** |
+| Email search | `icypeas_email_search.py`: submit (5/s) → save each search id → poll 100 results per read (≤30 reads/min) → stream each result. Resumable (`--resume`, never resubmits). `--probe` (key; `--account-email` adds credits), `--dry-run`, `--limit`. Every input, column and output is a flag |
+| Results file | `data/processed/contacts_email_enriched_2026-10-23.csv` (one file, appended per run) · raw: `data/raw/contacts_email_enriched_2026-10-23.{jsonl,state.json}` |
+| Database | `db/migrations/004_contacts_email.sql`: `email` (citext, unique), `email_mx_provider`, `email_enriched_at`, `email_validation`, `email_validation_at`, `email_search_id`, **generated** `email_status` |
+| Loader (`data.py`, 3 identical copies) | `load-emails FILE --id-column COL` (update only, never insert) · `export-contacts [--all] [--exclude-domains FILE --exclude-column COL]` · `stats` shows email status |
+| Skill | `.claude/skills/icypeas-email-fetch/`: `SKILL.md` (106 lines), `scripts/` (search, `review_results.py`, `data.py`, `probe_connections.sh`), `references/` (API reference, `run-and-load.md`), empty `assets/`, own `.env.template` |
+
+### Timeline
+
+| Time | Step | Result |
+|---|---|---|
+| ~07:15 | Project read-in; Icypeas keys added to `.env` / template | |
+| ~07:25 | Clean contacts exported from Supabase | 270 (suppressed domains excluded) |
+| ~07:35 | Icypeas docs read → API reference | async · key-only auth · polling 30/min |
+| 07:44 | Script tested against a fake Icypeas | sample · refuse without `--resume` · cut-off polling · resume: all ✅ |
+| 07:48 | Probe + **sample of 5** | 4 found, all `ultra_sure`, 6 s |
+| 07:50 | **Next 50** | 35 found (70%), 0 off-domain |
+| 07:53 | **Next 100** (into the single enriched CSV) | 76 found; tiers 1: 80% · 2: 73% |
+| ~08:00–08:15 | Profile → schema rounds with user → sign-off | |
+| 08:18 | **Migration 004 applied** (tracked in `gtm.schema_migrations`) | |
+| 08:19 | Load 10 → user review → load rest (08:24) | 155 loaded · re-run 0 changes |
+| 08:26 | Scripts parameterised; results CSV converted to new columns | loader re-run: 155 unchanged ✅ |
+| 08:31 | Skill built; export-contacts tested | 115 exported = exactly the unsearched clean contacts |
+
+### Key decisions
+
+| Decision | Why |
+|---|---|
+| Single email search + polling, not bulk + webhooks | No public server; polling in pages of 100 fits the 30 reads/min limit |
+| Auth = API key only; secret unused | Key-only auth since Icypeas v1.4.0; secret only verifies webhooks |
+| One results CSV per list, appended each run (`contacts_email_enriched_<date>.csv`) | User: no second CSV |
+| Gates 5 → 50 → 100 this session; skill: 5 → 100 → rest, batches of 50,000 when large | User's sample-before-scale rule |
+| Email columns on `gtm.contacts`, not a new table | One email per person |
+| `email_status` = `found` / `not_found` only, **generated** from `email_enriched_at` + `email` | Icypeas's DEBITED states are billing, not outcomes. Never-searched people (e.g. suppressed) must have no status |
+| Dropped `email_certainty`, `email_source`, `email_raw` | User doesn't trust provider confidence; one provider; raw adds nothing (kept on disk in `data/raw/`) |
+| Added `email_validation` / `email_validation_at` (empty) | A separate validation tool comes later |
+| Migration tracked in `gtm.schema_migrations`, not `supabase_migrations.schema_migrations` | The Supabase table holds only the movies project's history |
+| Required flags have no defaults (input, output, the four columns) | A forgotten flag stops the run instead of reusing this campaign's values |
+
+### Final state
+
+| | |
+|---|---|
+| `gtm.contacts` email status | found **115** · not_found **40** · not searched 132 (115 still to run + 17 suppressed) |
+| Icypeas | ~115 credits used (1 per email found; see the `DEBITED_NOT_FOUND` caveat below) |
+| Blitz | 388 records left (unchanged), resets 2026-11-02 |
+| Data files (git-ignored) | `contacts_clean_2026-10-23.csv` · `contacts_email_enriched_2026-10-23.csv` · `contacts_supabase_2026-10-23.csv` (the 115 left) · `data/raw/contacts_email_enriched_2026-10-23.*` |
+
+### Issues hit and how they were handled
+
+- **Icypeas keys printed in the chat.** The user had pasted them as `Label - value`. I ran the masked view and a length check in one command, so the check printed both values. The keys were kept for this exercise (user's call). Fixed by: the masked view now runs on its own command first (project memory + `SKILL.md` Step 0); the two lines were rewritten as `KEY=value` by a script that prints nothing. **Rotate both keys before any real use.**
+- **"Clean companies CSV" didn't exist.** Only the suppression list did. The clean contact list was built as all contacts minus suppressed domains.
+- **`DEBITED_NOT_FOUND`:** 34 misses carry a "debited" status, but Icypeas docs say misses are free. Unconfirmed; check the dashboard's credits used against 115.
+- **Validation errors return HTTP 200** (`success: false`). The script checks `success`, not just the code.
+- **Garbled names from LinkedIn** (e.g. symbols after a surname) still find emails but need cleaning before outreach.
+- **Polling at scale:** 50,000 pending ≈ 18 min per polling round. Fine for now; the bulk route is the upgrade if lists get large.
+
+### Next session
+
+1. Run `/icypeas-email-fetch` on the **115 remaining** contacts (Supabase source), through every gate. First live test of the credit probe (needs the Icypeas login email).
+2. Confirm whether `DEBITED_NOT_FOUND` costs credits (dashboard vs found count).
+3. Pick an email validation tool → fill `email_validation` / `email_validation_at` (a new migration only if values need a check constraint).
+4. `first_name_clean` / name cleaning before copy.
+5. Rotate the Icypeas key and secret.
+
+---
+
 ## Session 2 — 2026-10-21 · Parameterised pipeline, three skills, Attio suppression gate
 
 **Goal:** make the session-1 engine reusable for any campaign without code changes, package it as skills, and build CRM suppression from Attio.
