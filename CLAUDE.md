@@ -72,6 +72,7 @@ Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad r
 ## API references
 
 - Blitz (people/company data, emails): `docs/blitz-api-reference.md`. Our plan is a free trial with ~1,000 records/month and 5 req/s per endpoint, so cap every pull.
+- Icypeas (email finder): `docs/icypeas-api-reference.md`. Async: submit, then poll. Polling for results is capped at 30 calls/min, so read in pages of 100. Auth is the API key alone; the secret only verifies webhooks.
 
 ## Database tables (Supabase, schema `gtm`)
 
