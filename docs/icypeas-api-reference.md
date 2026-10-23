@@ -4,7 +4,7 @@ Internal reference for the Icypeas API (email discovery, email verification, dom
 Source: https://api-doc.icypeas.com (docs v1.15.0). Compiled 2026-10-23.
 
 **Our use:** find work emails for the clean contact list (`data/processed/contacts_clean_2026-10-23.csv`, 270 people: first name, last name, company domain).
-**Not yet confirmed live:** our credit balance, the exact JSON of a finished result, and the 401/429 response bodies. The docs don't show these. Fill them in after the first probe.
+**Confirmed live 2026-10-23:** key-only auth works; list reads return `items`; finished-item shape below (5-person sample: 4 found, all `ultra_sure`). **Still unconfirmed:** credit balance, 401/429 bodies.
 
 ---
 
@@ -138,7 +138,7 @@ Every endpoint is `POST` with a JSON body.
 ```
 
 ### A finished search item
-Returned by `/bulk-single-searchs/read` and by the per-item webhook. The structure comes from the webhook docs; field names are to be confirmed on the first live read.
+Returned by `/bulk-single-searchs/read` (inside `items`) and by the per-item webhook. Confirmed live 2026-10-23; the real item also has `results.li`, `results.saasServices` and `userData.provider`. Found items came back as both `FOUND` and `DEBITED`, so treat the two the same.
 ```json
 {
   "_id": "<search id>",
