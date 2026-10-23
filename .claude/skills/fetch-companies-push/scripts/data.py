@@ -2,12 +2,13 @@
 """Supabase helper for the GTM project: run migrations and load CSVs into the gtm schema.
 
 Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt):
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py migrate                 # apply new files in db/migrations
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
-    .venv/bin/python .claude/skills/fetch-companies-push/scripts/data.py stats                   # row counts and link checks
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py migrate                 # apply new files in db/migrations
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-emails FILE [--limit N]      # email-enrichment CSV -> email columns of existing contacts
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py stats                   # row counts and link checks
 
 Loads are upserts, so re-running is safe; unchanged rows are left untouched (updated_at
 only moves when something changed). Each row commits on its own: a bad row is logged to
@@ -15,6 +16,8 @@ logs/data_errors.log and the load carries on. Contacts are skipped if they have 
 (decision 2026-10-19: they can't get {FIRST_NAME}) or their company isn't loaded yet.
 ORDER MATTERS: companies first, then contacts. Each contact links to its company (foreign key), so
 a contact whose company isn't loaded is skipped. `load` does both in the right order.
+load-emails only updates contacts already in gtm.contacts (matched on person_linkedin_url); it never
+inserts. email_status is computed by the database (migration 004).
 Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER (transaction pooler, port 6543).
 """
 import argparse
@@ -161,6 +164,44 @@ def load_contacts(file, limit=None):
                         "Load the matching companies file first, then re-run this contacts load.", missing)
 
 
+EMAIL_SQL = """
+update gtm.contacts set email = %(email)s, email_mx_provider = %(mx)s,
+                        email_enriched_at = %(at)s, email_search_id = %(sid)s
+where person_linkedin_url = %(key)s
+  and (email, email_mx_provider, email_enriched_at, email_search_id)
+      is distinct from (%(email)s::extensions.citext, %(mx)s, %(at)s::timestamptz, %(sid)s)
+returning 1
+"""
+
+
+def load_emails(file, limit=None):
+    """Write email-enrichment results (contacts_email_enriched_<date>.csv) to the email columns of
+    existing contacts. The search time comes from the provider's raw response (system.modifiedAt)."""
+    updated = unchanged = skipped = errors = 0
+    with connect(pooled=True) as conn, open(file, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if limit is not None and updated + unchanged >= limit:
+                break
+            key = row["person_linkedin_url"]
+            try:
+                params = {"key": key, "email": row["email"].strip() or None,
+                          "mx": row["email_mx_provider"].strip() or None,
+                          "at": json.loads(row["raw"])["system"]["modifiedAt"],
+                          "sid": row["icypeas_search_id"].strip() or None}
+                if conn.execute(EMAIL_SQL, params).fetchone():
+                    updated += 1
+                elif conn.execute("select 1 from gtm.contacts where person_linkedin_url = %s", (key,)).fetchone():
+                    unchanged += 1
+                else:
+                    skipped += 1
+                    logging.info("skipped %s: contact not in gtm.contacts", key)
+            except (psycopg.Error, ValueError, KeyError) as e:
+                errors += 1
+                log_error("contacts.email", key, e, {k: v for k, v in row.items() if k != "raw"})
+    logging.info("contacts email: %d updated, %d unchanged, %d skipped (not in gtm.contacts), %d errors%s",
+                 updated, unchanged, skipped, errors, f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "")
+
+
 def stats():
     with connect(pooled=True) as conn:
         for label, sql in [
@@ -174,6 +215,9 @@ def stats():
             print(f"{label:<28} {conn.execute(sql).fetchone()[0]}")
         tiers = conn.execute("select icp_tier, count(*) from gtm.contacts group by 1 order by 1").fetchall()
         print("contacts by icp_tier         " + ", ".join(f"{t}: {n}" for t, n in tiers))
+        status = conn.execute("select coalesce(email_status, 'not searched'), count(*) from gtm.contacts "
+                              "group by 1 order by 1").fetchall()
+        print("contacts by email_status     " + ", ".join(f"{s}: {n}" for s, n in status))
 
 
 def export_companies(include_with_contact):
@@ -214,8 +258,9 @@ def main():
         handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "export-companies", "stats"])
-    parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts)")
+    parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "load-emails",
+                                            "export-companies", "stats"])
+    parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts / load-emails)")
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
@@ -242,6 +287,8 @@ def main():
         load("companies", COMPANY_COLUMNS, "domain", args.file, limit=args.limit)
     elif args.command == "load-contacts":
         load_contacts(args.file, limit=args.limit)
+    elif args.command == "load-emails":
+        load_emails(args.file, limit=args.limit)
     elif args.command == "export-companies":
         export_companies(args.all)
     else:

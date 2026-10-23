@@ -51,6 +51,7 @@ The scripts hold no campaign values. Every filter, title cascade and input file 
 migrate                                  # apply new files in db/migrations (direct connection)
 load --companies FILE --contacts FILE    # both, companies first
 load-companies FILE / load-contacts FILE # upsert into gtm.companies (domain) / gtm.contacts (person_linkedin_url)
+load-emails FILE                         # email-enrichment CSV → email columns of existing contacts (update only)
 export-companies [--all]                 # companies with no contact yet (--all: every company) → CSV for the contact search
 stats                                    # row counts, companies without a contact, tiers
 ```

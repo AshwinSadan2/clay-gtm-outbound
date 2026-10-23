@@ -40,7 +40,7 @@ create index contacts_company_domain_idx on gtm.contacts (company_domain);
 | **`ranking`, `connections_count`** | Left in `raw`. |
 | **No `first_name_clean` yet** | Added at the copy stage. |
 | **One contact per company not enforced** | Adding a second contact later needs no schema change. |
-| **No email columns yet** | The Icypeas session adds `email_*` columns as its own migration. |
+| **No email columns yet** | Superseded 2026-10-23: see §4 (migration 004). |
 
 ## 3. Loaded state (2026-10-19)
 
@@ -53,3 +53,35 @@ create index contacts_company_domain_idx on gtm.contacts (company_domain);
 | Contacts by `icp_tier` | 1: 117 · 2: 41 · 3: 25 · 4: 14 · 5: 77 · 6: 13 |
 | Orphan contacts | 0 |
 | Re-run of both loads | 0 inserted, 0 updated: fully idempotent |
+
+---
+
+## 4. Email columns (migration 004, signed off 2026-10-23)
+
+**Status:** ✅ Signed off 2026-10-23 · `db/migrations/004_contacts_email.sql` · not yet applied.
+**Source data:** `data/processed/contacts_email_enriched_2026-10-23.csv` (Icypeas, appended per run).
+
+| Column | Type | Filled by | Meaning |
+|---|---|---|---|
+| `email` | `citext` | loader | Best email found; null = none found or never searched |
+| `email_status` | `text`, **generated** | database | null = never searched · `found` · `not_found` |
+| `email_mx_provider` | `text` | loader | google, microsoft, mimecast… |
+| `email_enriched_at` | `timestamptz` | loader | When the search finished (Icypeas `system.modifiedAt`); set for found **and** not-found |
+| `email_validation` | `text` | later | Separate validation tool's result; allowed values set when the tool is chosen |
+| `email_validation_at` | `timestamptz` | later | When validated |
+| `email_search_id` | `text` | loader | Icypeas search id: the only link back to the original result |
+
+**Rules enforced by the database**
+- `email_status` is computed from `email_enriched_at` + `email`, so it can't be set by hand or disagree.
+- An email can't exist without `email_enriched_at`.
+- `email_validation` and `email_validation_at` are both set or both empty.
+- `email` is unique where present.
+
+**Decisions**
+| Decision | Why |
+|---|---|
+| `email_status` = found / not_found only, ours, not Icypeas's | Icypeas's DEBITED / DEBITED_NOT_FOUND are billing states, not outcomes |
+| Never-searched contacts (e.g. the 17 at suppressed companies) have **no** status | Saying `not_found` would claim a search that never happened |
+| No `email_certainty` | The provider's own confidence isn't trusted; a separate validation tool fills `email_validation` |
+| No `email_source` | One provider today; add when a second arrives |
+| No `email_raw` | The user's call: the columns hold everything of value. Full responses stay on disk in `data/raw/emails_icypeas_<date>.jsonl` (exception to the "keep raw" rule) |
