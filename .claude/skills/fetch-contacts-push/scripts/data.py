@@ -6,7 +6,7 @@ Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip inst
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load --companies FILE --contacts FILE [--limit N]   # both, companies first
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-companies FILE [--limit N]   # upsert into gtm.companies on domain
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
-    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-emails FILE [--limit N]      # email-enrichment CSV -> email columns of existing contacts
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-emails FILE --id-column COL [--limit N]   # email-enrichment CSV -> email columns of existing contacts
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py stats                   # row counts and link checks
 
@@ -16,8 +16,9 @@ logs/data_errors.log and the load carries on. Contacts are skipped if they have 
 (decision 2026-10-19: they can't get {FIRST_NAME}) or their company isn't loaded yet.
 ORDER MATTERS: companies first, then contacts. Each contact links to its company (foreign key), so
 a contact whose company isn't loaded is skipped. `load` does both in the right order.
-load-emails only updates contacts already in gtm.contacts (matched on person_linkedin_url); it never
-inserts. email_status is computed by the database (migration 004).
+load-emails only updates contacts already in gtm.contacts: --id-column names the CSV column holding the
+person's LinkedIn URL (matched on person_linkedin_url). It never inserts. It reads the CSV columns named after
+the database columns (EMAIL_COLUMNS); email_status is computed by the database (migration 004).
 Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER (transaction pooler, port 6543).
 """
 import argparse
@@ -164,30 +165,33 @@ def load_contacts(file, limit=None):
                         "Load the matching companies file first, then re-run this contacts load.", missing)
 
 
+# Email-enrichment CSV columns, named exactly as in gtm.contacts (migration 004).
+EMAIL_COLUMNS = ["email", "email_mx_provider", "email_enriched_at", "email_search_id"]
 EMAIL_SQL = """
-update gtm.contacts set email = %(email)s, email_mx_provider = %(mx)s,
-                        email_enriched_at = %(at)s, email_search_id = %(sid)s
+update gtm.contacts set email = %(email)s, email_mx_provider = %(email_mx_provider)s,
+                        email_enriched_at = %(email_enriched_at)s, email_search_id = %(email_search_id)s
 where person_linkedin_url = %(key)s
   and (email, email_mx_provider, email_enriched_at, email_search_id)
-      is distinct from (%(email)s::extensions.citext, %(mx)s, %(at)s::timestamptz, %(sid)s)
+      is distinct from (%(email)s::extensions.citext, %(email_mx_provider)s,
+                        %(email_enriched_at)s::timestamptz, %(email_search_id)s)
 returning 1
 """
 
 
-def load_emails(file, limit=None):
-    """Write email-enrichment results (contacts_email_enriched_<date>.csv) to the email columns of
-    existing contacts. The search time comes from the provider's raw response (system.modifiedAt)."""
+def load_emails(file, id_column, limit=None):
+    """Write email-enrichment results to the email columns of existing contacts (update only)."""
     updated = unchanged = skipped = errors = 0
     with connect(pooled=True) as conn, open(file, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        missing = [c for c in [id_column] + EMAIL_COLUMNS if c not in reader.fieldnames]
+        if missing:
+            sys.exit(f"{file} is missing columns: {missing}")
+        for row in reader:
             if limit is not None and updated + unchanged >= limit:
                 break
-            key = row["person_linkedin_url"]
+            key = row[id_column].strip()
             try:
-                params = {"key": key, "email": row["email"].strip() or None,
-                          "mx": row["email_mx_provider"].strip() or None,
-                          "at": json.loads(row["raw"])["system"]["modifiedAt"],
-                          "sid": row["icypeas_search_id"].strip() or None}
+                params = {"key": key, **{c: row[c].strip() or None for c in EMAIL_COLUMNS}}
                 if conn.execute(EMAIL_SQL, params).fetchone():
                     updated += 1
                 elif conn.execute("select 1 from gtm.contacts where person_linkedin_url = %s", (key,)).fetchone():
@@ -264,6 +268,7 @@ def main():
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
+    parser.add_argument("--id-column", help="load-emails: CSV column holding the person's LinkedIn URL")
     parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a contact")
     args = parser.parse_args()
@@ -272,6 +277,8 @@ def main():
         ENV_FILE = Path(args.env).expanduser().resolve()
     if args.command.startswith("load-") and not args.file:
         parser.error(f"{args.command} needs a CSV file")
+    if args.command == "load-emails" and not args.id_column:
+        parser.error("load-emails needs --id-column COL (the CSV column holding the LinkedIn URL)")
     if args.command == "load" and not (args.companies and args.contacts):
         parser.error("load needs --companies FILE and --contacts FILE")
     for path in [args.file, args.companies, args.contacts]:
@@ -288,7 +295,7 @@ def main():
     elif args.command == "load-contacts":
         load_contacts(args.file, limit=args.limit)
     elif args.command == "load-emails":
-        load_emails(args.file, limit=args.limit)
+        load_emails(args.file, args.id_column, limit=args.limit)
     elif args.command == "export-companies":
         export_companies(args.all)
     else:

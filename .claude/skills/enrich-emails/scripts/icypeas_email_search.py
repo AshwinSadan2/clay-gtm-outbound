@@ -4,21 +4,24 @@
 Icypeas is asynchronous (docs/icypeas-api-reference.md): a search call only returns a search id.
 This script submits, saves each id, then polls the results route until every search reaches a
 final status. Polling is capped by Icypeas at 30 calls/min, so it reads up to 100 results per call.
+The script holds no run values: the input file, its column names and the output file are flags.
 
 Sample, then scale:
-    python3 .claude/skills/enrich-emails/scripts/icypeas_email_search.py --probe          # key check, free
-    python3 .claude/skills/enrich-emails/scripts/icypeas_email_search.py \
-      --contacts data/processed/contacts_clean_2026-10-23.csv --limit 5 --dry-run        # show requests, no calls
-    python3 .claude/skills/enrich-emails/scripts/icypeas_email_search.py \
-      --contacts data/processed/contacts_clean_2026-10-23.csv --limit 5                  # sample: 5 people
-    python3 .claude/skills/enrich-emails/scripts/icypeas_email_search.py \
-      --contacts data/processed/contacts_clean_2026-10-23.csv --resume                   # scale: everyone left
+    S=.claude/skills/enrich-emails/scripts/icypeas_email_search.py
+    python3 $S --probe                                                                 # key check, free
+    python3 $S --contacts IN.csv --output data/processed/contacts_email_enriched_<date>.csv \
+      --first-name-column first_name --last-name-column last_name \
+      --domain-column company_domain --id-column person_linkedin_url \
+      --limit 5 --dry-run                                                              # show requests, no calls
+    python3 $S ...same flags... --limit 5                                              # sample: 5 people
+    python3 $S ...same flags... --resume --limit 50                                    # next 50
+    python3 $S ...same flags... --resume                                               # everyone left
 
-Input:  any contacts CSV with first_name, last_name, company_domain, person_linkedin_url columns
+Input:  any contacts CSV; --id-column must be unique per person (it joins results back to the database)
 Writes (appended as each search finishes; --resume never resubmits a person already submitted):
-    data/raw/emails_icypeas_<date>.jsonl         one line per finished search: our id + the API item, untouched
-    data/raw/emails_icypeas_<date>.state.json    submitted search ids and finished people (resume point)
-    data/processed/contacts_email_enriched_<date>.csv   input columns + email, certainty, status, raw (one file, appended each run)
+    --output                                  input columns + the RESULT_COLUMNS below (one file, appended each run)
+    data/raw/<output name>.jsonl              one line per finished search: our id + the API item, untouched
+    data/raw/<output name>.state.json         submitted search ids and finished people (resume point)
 Credits: 1 per email found; a search with no email costs nothing.
 Run log: logs/icypeas_email_search.log. Failed calls: logs/icypeas_email_search_errors.log.
 """
@@ -31,26 +34,28 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import date
 from pathlib import Path
 
 # The project folder is wherever the script is run from (the skill folder holds only code).
 ROOT = Path.cwd()
 ENV_FILE = ROOT / ".env"  # --env overrides
-SEARCH_URL = "https://app.icypeas.com/api/email-search"
-READ_URL = "https://app.icypeas.com/api/bulk-single-searchs/read"
 LOG_FILE = ROOT / "logs" / "icypeas_email_search.log"
 ERROR_LOG = ROOT / "logs" / "icypeas_email_search_errors.log"
 
-REQUIRED_COLUMNS = ["first_name", "last_name", "company_domain", "person_linkedin_url"]
-RESULT_COLUMNS = ["email", "email_certainty", "email_mx_provider", "emails_found",
-                  "icypeas_status", "icypeas_search_id", "raw"]
+# Icypeas API facts (docs/icypeas-api-reference.md), not run settings.
+SEARCH_URL = "https://app.icypeas.com/api/email-search"
+READ_URL = "https://app.icypeas.com/api/bulk-single-searchs/read"
+MAX_SUBMIT_RPS = 10      # /email-search limit
+MAX_READS_PER_MIN = 30   # /bulk-single-searchs/read limit (polling)
+READ_PAGE = 100          # max results per read call
+FIRST_POLL_AFTER = 5     # Icypeas: wait a few seconds before the first read
 FINAL_STATUSES = {"FOUND", "DEBITED", "NOT_FOUND", "DEBITED_NOT_FOUND",
                   "BAD_INPUT", "INSUFFICIENT_FUNDS", "ABORTED"}
-CERTAINTY_RANK = {"ultra_sure": 3, "very_sure": 3, "probable": 2}
-READ_PAGE = 100          # max results per read call
-SUBMIT_RPS = 5           # Icypeas allows 10/s on /email-search; stay at half
-READ_INTERVAL = 2.2      # Icypeas allows 30 reads/min = one per 2 s; keep a margin
+CERTAINTY_RANK = {"ultra_sure": 3, "very_sure": 3, "probable": 2}  # picks one email if several come back
+
+# email_* columns are named after gtm.contacts (migration 004), so the loader maps them 1:1.
+RESULT_COLUMNS = ["email", "email_status", "email_mx_provider", "email_enriched_at", "email_search_id",
+                  "email_provider_status", "email_certainty", "emails_found", "raw"]
 
 
 class RateLimiter:
@@ -180,69 +185,100 @@ def main():
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--contacts", help="contacts CSV to enrich")
-    parser.add_argument("--limit", type=int, help="submit at most N new people this run (the sample)")
+    parser.add_argument("--output", help="results CSV, appended each run (e.g. data/processed/contacts_email_enriched_<date>.csv)")
+    parser.add_argument("--first-name-column", help="input column holding the first name")
+    parser.add_argument("--last-name-column", help="input column holding the last name")
+    parser.add_argument("--domain-column", help="input column holding the company domain (or company name)")
+    parser.add_argument("--id-column", help="input column unique per person, used to join results back")
+    parser.add_argument("--limit", type=int, help="submit at most N new people this run (sample / next batch)")
     parser.add_argument("--resume", action="store_true", help="continue a run: poll what's pending, submit the rest")
     parser.add_argument("--dry-run", action="store_true", help="print the requests; call nothing")
     parser.add_argument("--probe", action="store_true", help="one free read call to check the API key, then exit")
-    parser.add_argument("--date", default=date.today().isoformat(), help="output file date (default today; "
-                        "pass the original date to --resume a run started on another day)")
-    parser.add_argument("--max-wait", type=int, default=600, help="seconds to poll before saving and exiting")
+    parser.add_argument("--submit-rps", type=float, default=5, help=f"searches sent per second (max {MAX_SUBMIT_RPS})")
+    parser.add_argument("--reads-per-min", type=float, default=27, help=f"polling reads per minute (max {MAX_READS_PER_MIN})")
     parser.add_argument("--poll-every", type=int, default=10, help="seconds between polling rounds")
+    parser.add_argument("--max-wait", type=int, default=600, help="seconds to poll before saving and exiting")
     parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     args = parser.parse_args()
     if args.env:
         ENV_FILE = Path(args.env).expanduser().resolve()
+    if not 0 < args.submit_rps <= MAX_SUBMIT_RPS:
+        parser.error(f"--submit-rps must be above 0 and at most {MAX_SUBMIT_RPS} (Icypeas limit)")
+    if not 0 < args.reads_per_min <= MAX_READS_PER_MIN:
+        parser.error(f"--reads-per-min must be above 0 and at most {MAX_READS_PER_MIN} (Icypeas limit)")
+    read_limiter = RateLimiter(60 / args.reads_per_min)
 
     if args.probe:
         resp = post(env_get("ICYPEAS_API_KEY"), READ_URL, {"mode": "single", "limit": 1},
-                    RateLimiter(READ_INTERVAL), "probe", attempts=1)
+                    read_limiter, "probe", attempts=1)
         ok = bool(resp and resp.get("success"))
         logging.info("Icypeas key: %s", "PASS" if ok else f"FAIL (see {ERROR_LOG.relative_to(ROOT)})")
         sys.exit(0 if ok else 1)
 
-    if not args.contacts:
-        parser.error("--contacts is required (unless --probe)")
-    raw_dir, out_dir = ROOT / "data" / "raw", ROOT / "data" / "processed"
+    # No defaults: a forgotten flag stops the run instead of guessing.
+    columns = {"first": args.first_name_column, "last": args.last_name_column,
+               "domain": args.domain_column, "id": args.id_column}
+    missing_flags = [f for f, v in [("--contacts", args.contacts), ("--output", args.output),
+                                    ("--first-name-column", columns["first"]), ("--last-name-column", columns["last"]),
+                                    ("--domain-column", columns["domain"]), ("--id-column", columns["id"])] if not v]
+    if missing_flags:
+        parser.error("missing " + ", ".join(missing_flags) + " (all are required unless --probe)")
+
+    out_path = Path(args.output)
+    if not out_path.is_absolute():
+        out_path = ROOT / out_path
+    raw_dir = ROOT / "data" / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = raw_dir / f"emails_icypeas_{args.date}.jsonl"
-    state_path = raw_dir / f"emails_icypeas_{args.date}.state.json"
-    out_path = out_dir / f"contacts_email_enriched_{args.date}.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / f"{out_path.stem}.jsonl"
+    state_path = raw_dir / f"{out_path.stem}.state.json"
 
     with open(args.contacts, newline="") as f:
         reader = csv.DictReader(f)
         in_columns = reader.fieldnames
-        missing = [c for c in REQUIRED_COLUMNS if c not in in_columns]
+        missing = [c for c in columns.values() if c not in in_columns]
         if missing:
-            sys.exit(f"{args.contacts} is missing columns: {', '.join(missing)}")
-        rows = {r["person_linkedin_url"]: r for r in reader if r["person_linkedin_url"]}
+            sys.exit(f"{args.contacts} has no column(s): {', '.join(missing)}. Columns: {', '.join(in_columns)}")
+        clash = [c for c in RESULT_COLUMNS if c in in_columns]
+        if clash:
+            sys.exit(f"{args.contacts} already has result column(s) {', '.join(clash)}: pass the un-enriched list")
+        rows, duplicates = {}, 0
+        for r in reader:
+            k = r[columns["id"]].strip()
+            if not k:
+                continue
+            duplicates += k in rows
+            rows[k] = r
+    if duplicates:
+        sys.exit(f"--id-column {columns['id']} is not unique ({duplicates} repeats): pick a column unique per person")
 
     state = load_state(state_path)
     if state["submitted"] and not args.resume and not args.dry_run:
         sys.exit(f"{state_path.relative_to(ROOT)} already has {len(state['submitted'])} submitted searches. "
                  "Re-run with --resume to continue it (nothing is resubmitted).")
     if state["contacts"] and state["contacts"] != str(args.contacts):
-        sys.exit(f"This run was started on {state['contacts']}, not {args.contacts}. Use another --date.")
+        sys.exit(f"This run was started on {state['contacts']}, not {args.contacts}. Use another --output.")
 
     to_submit = [k for k in rows if k not in state["submitted"]]
     if args.limit is not None:
         to_submit = to_submit[:args.limit]
 
     def body_for(row):
-        return {"firstname": row["first_name"].strip(), "lastname": row["last_name"].strip(),
-                "domainOrCompany": row["company_domain"].strip(),
-                "custom": {"externalId": row["person_linkedin_url"]}}
+        return {"firstname": row[columns["first"]].strip(), "lastname": row[columns["last"]].strip(),
+                "domainOrCompany": row[columns["domain"]].strip(),
+                "custom": {"externalId": row[columns["id"]].strip()}}
 
     if args.dry_run:
         print(f"DRY RUN: would submit {len(to_submit)} searches (max {len(to_submit)} credits) "
-              f"and poll {len(state['submitted']) - len(state['done'])} pending. No calls made.")
+              f"and poll {len(state['submitted']) - len(state['done'])} pending. "
+              f"{len(rows) - len(state['submitted'])} of {len(rows)} people not yet submitted. No calls made.")
         for k in to_submit:
             print(json.dumps(body_for(rows[k])))
         return
 
     api_key = env_get("ICYPEAS_API_KEY")
     state["contacts"] = str(args.contacts)
-    submit_limiter, read_limiter = RateLimiter(1 / SUBMIT_RPS), RateLimiter(READ_INTERVAL)
+    submit_limiter = RateLimiter(1 / args.submit_rps)
     errors = 0
 
     # 1. Submit. Each id is saved the moment it comes back.
@@ -271,7 +307,7 @@ def main():
         if new_file:
             writer.writeheader()
         if waiting:
-            time.sleep(5)  # Icypeas: wait a few seconds before the first read
+            time.sleep(FIRST_POLL_AFTER)
         while waiting and time.monotonic() < deadline:
             for item in read_round(api_key, set(waiting), read_limiter):
                 sid, status = item.get("_id"), item.get("status")
@@ -279,12 +315,15 @@ def main():
                     continue
                 k = waiting.pop(sid)
                 email, n = best_email(item)
-                raw_f.write(json.dumps({"person_linkedin_url": k, "search_id": sid, "item": item}) + "\n")
+                raw_f.write(json.dumps({"id": k, "search_id": sid, "item": item}) + "\n")
                 raw_f.flush()
-                writer.writerow({**rows.get(k, {"person_linkedin_url": k}),
-                                 "email": email.get("email", ""), "email_certainty": email.get("certainty", ""),
-                                 "email_mx_provider": email.get("mxProvider", ""), "emails_found": n,
-                                 "icypeas_status": status, "icypeas_search_id": sid,
+                writer.writerow({**rows.get(k, {columns["id"]: k}),
+                                 "email": email.get("email", ""),
+                                 "email_status": "found" if email.get("email") else "not_found",
+                                 "email_mx_provider": email.get("mxProvider", ""),
+                                 "email_enriched_at": (item.get("system") or {}).get("modifiedAt", ""),
+                                 "email_search_id": sid, "email_provider_status": status,
+                                 "email_certainty": email.get("certainty", ""), "emails_found": n,
                                  "raw": json.dumps(item, separators=(",", ":"))})
                 out_f.flush()
                 state["done"].append(k)
@@ -300,7 +339,8 @@ def main():
         logging.warning("%d searches not finished after %ss. Re-run with --resume to keep polling "
                         "(nothing is resubmitted).", len(waiting), args.max_wait)
     logging.info("errors this run: %d%s", errors, f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "")
-    logging.info("results: %s", out_path.relative_to(ROOT))
+    logging.info("progress: %d of %d people done; results: %s", len(state["done"]), len(rows),
+                 out_path.relative_to(ROOT) if out_path.is_relative_to(ROOT) else out_path)
 
 
 if __name__ == "__main__":
