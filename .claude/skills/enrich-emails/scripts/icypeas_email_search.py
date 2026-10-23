@@ -18,7 +18,7 @@ Input:  any contacts CSV with first_name, last_name, company_domain, person_link
 Writes (appended as each search finishes; --resume never resubmits a person already submitted):
     data/raw/emails_icypeas_<date>.jsonl         one line per finished search: our id + the API item, untouched
     data/raw/emails_icypeas_<date>.state.json    submitted search ids and finished people (resume point)
-    data/processed/emails_icypeas_<date>.csv     input columns + email, certainty, status, raw
+    data/processed/contacts_email_enriched_<date>.csv   input columns + email, certainty, status, raw (one file, appended each run)
 Credits: 1 per email found; a search with no email costs nothing.
 Run log: logs/icypeas_email_search.log. Failed calls: logs/icypeas_email_search_errors.log.
 """
@@ -207,7 +207,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     raw_path = raw_dir / f"emails_icypeas_{args.date}.jsonl"
     state_path = raw_dir / f"emails_icypeas_{args.date}.state.json"
-    out_path = out_dir / f"emails_icypeas_{args.date}.csv"
+    out_path = out_dir / f"contacts_email_enriched_{args.date}.csv"
 
     with open(args.contacts, newline="") as f:
         reader = csv.DictReader(f)
