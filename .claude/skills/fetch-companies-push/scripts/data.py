@@ -8,6 +8,8 @@ Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip inst
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-emails FILE --id-column COL [--limit N]   # email-enrichment CSV -> email columns of existing contacts
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-contacts [--all] [--exclude-domains FILE --exclude-column COL]
+                                                                    # contacts CSV for email enrichment (default: never searched)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py stats                   # row counts and link checks
 
 Loads are upserts, so re-running is safe; unchanged rows are left untouched (updated_at
@@ -244,6 +246,40 @@ def export_companies(include_with_contact):
     return out
 
 
+EXPORT_CONTACT_COLUMNS = ["first_name", "last_name", "job_title", "icp_tier", "company_name", "company_domain",
+                          "website", "person_linkedin_url", "location_country_code", "headline"]
+
+
+def export_contacts(include_searched, exclude_file=None, exclude_column=None):
+    """Write contacts from gtm.contacts (by default only those never email-searched) to a CSV the
+    email search can read, skipping companies listed in `exclude_file` (e.g. a suppression CSV)."""
+    excluded = []
+    if exclude_file:
+        with open(exclude_file, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if exclude_column not in reader.fieldnames:
+                sys.exit(f"{exclude_file} has no column {exclude_column}. Columns: {', '.join(reader.fieldnames)}")
+            excluded = sorted({r[exclude_column].strip().lower() for r in reader if r[exclude_column].strip()})
+    out = ROOT / "data" / "processed" / f"contacts_supabase_{date.today().isoformat()}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    sql = ("select p.first_name, p.last_name, p.job_title, p.icp_tier, c.name as company_name, p.company_domain, "
+           "c.website, p.person_linkedin_url, p.location_country_code, p.headline "
+           "from gtm.contacts p join gtm.companies c on c.domain = p.company_domain "
+           "where p.company_domain <> all(%s::extensions.citext[])")
+    if not include_searched:
+        sql += " and p.email_enriched_at is null"
+    rows = 0
+    with connect(pooled=True) as conn, open(out, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(EXPORT_CONTACT_COLUMNS)
+        for row in conn.execute(sql + " order by p.icp_tier, c.name", (excluded,)):
+            writer.writerow(row)
+            rows += 1
+    logging.info("exported %d contacts%s%s to %s", rows, "" if include_searched else " never email-searched",
+                 f", excluding {len(excluded)} domains from {exclude_file}" if excluded else "", out.relative_to(ROOT))
+    return out
+
+
 def skip_contact(row, conn):
     if not row["first_name"].strip():
         return "no first name"
@@ -263,14 +299,17 @@ def main():
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "load-emails",
-                                            "export-companies", "stats"])
+                                            "export-companies", "export-contacts", "stats"])
     parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts / load-emails)")
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
     parser.add_argument("--id-column", help="load-emails: CSV column holding the person's LinkedIn URL")
     parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
-    parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a contact")
+    parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a "
+                        "contact; export-contacts: include contacts already email-searched")
+    parser.add_argument("--exclude-domains", help="export-contacts: CSV of company domains to leave out (e.g. suppression)")
+    parser.add_argument("--exclude-column", help="export-contacts: the domain column in --exclude-domains")
     args = parser.parse_args()
     global ENV_FILE
     if args.env:
@@ -279,9 +318,11 @@ def main():
         parser.error(f"{args.command} needs a CSV file")
     if args.command == "load-emails" and not args.id_column:
         parser.error("load-emails needs --id-column COL (the CSV column holding the LinkedIn URL)")
+    if bool(args.exclude_domains) != bool(args.exclude_column):
+        parser.error("--exclude-domains and --exclude-column go together")
     if args.command == "load" and not (args.companies and args.contacts):
         parser.error("load needs --companies FILE and --contacts FILE")
-    for path in [args.file, args.companies, args.contacts]:
+    for path in [args.file, args.companies, args.contacts, args.exclude_domains]:
         if path and not Path(path).is_file():
             parser.error(f"file not found: {path}")
 
@@ -298,6 +339,8 @@ def main():
         load_emails(args.file, args.id_column, limit=args.limit)
     elif args.command == "export-companies":
         export_companies(args.all)
+    elif args.command == "export-contacts":
+        export_contacts(args.all, args.exclude_domains, args.exclude_column)
     else:
         stats()
 

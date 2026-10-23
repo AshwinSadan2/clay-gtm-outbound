@@ -35,24 +35,26 @@ The owner is not a developer. Explain work in plain English and make technical c
 - Never print, echo or paste `.env` values. When checking `.env`, first look at it masked (`sed -E 's/[A-Za-z0-9]/x/g' .env`), then report only key names and whether they're filled in.
 - `.env`, the database, data files and logs are all in `.gitignore` — prospect data is personal information and must not be committed.
 
-## The skills (list building + suppression)
+## The skills (list building + suppression + emails)
 
-All pipeline code lives in three local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
+All pipeline code lives in four local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
 
 - **`/fetch-companies-push`** (`.claude/skills/fetch-companies-push/`): Blitz company search → `gtm.companies`. Ends by offering the contacts skill.
 - **`/fetch-contacts-push`** (`.claude/skills/fetch-contacts-push/`): reads companies from Supabase → Blitz contact search (title cascade via Waterfall ICP, or a single designation via People Search) → `gtm.contacts`.
 - **`/suppression-gate`** (`.claude/skills/suppression-gate/`, with its own `.env.template`): Attio suppression in three gated stages: `attio_profile.py` → `attio_download.py` → `attio_suppress.py` (preview, then `--apply`). Flags: `--level domain|contact`, `--categories`, `--days` (default 90). CSV output only, never a DB change. **Contact level matches on email only and never runs without emails.** Agreed rules: `docs/build-log.md` Session 2.
+- **`/icypeas-email-fetch`** (`.claude/skills/icypeas-email-fetch/`, own `.env.template`): CSV or Supabase export → Icypeas email search (submit, then poll) → `gtm.contacts` email columns. Gates: probe (key + credits) → 5 → 100 → rest (batches of 50,000 when large) → push.
 
 The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project (creating `data/` and `logs/` if missing) and read `.env` from it, so run them from the project root. Every script, including `probe_connections.sh`, takes `--env PATH` for a `.env` stored elsewhere.
 
-`data.py` (Supabase loader) and `probe_connections.sh` are identical copies in both skills' `scripts/`. **If you change one, change both.** Loader commands (`.venv/bin/python .claude/skills/<skill>/scripts/data.py ...`):
+`data.py` (Supabase loader) and `probe_connections.sh` are identical copies in every skill's `scripts/` that has them. **If you change one, change all.** Loader commands (`.venv/bin/python .claude/skills/<skill>/scripts/data.py ...`):
 
 ```
 migrate                                  # apply new files in db/migrations (direct connection)
 load --companies FILE --contacts FILE    # both, companies first
 load-companies FILE / load-contacts FILE # upsert into gtm.companies (domain) / gtm.contacts (person_linkedin_url)
-load-emails FILE                         # email-enrichment CSV → email columns of existing contacts (update only)
+load-emails FILE --id-column COL        # email-enrichment CSV → email columns of existing contacts (update only)
 export-companies [--all]                 # companies with no contact yet (--all: every company) → CSV for the contact search
+export-contacts [--all] [--exclude-domains FILE --exclude-column COL]  # never email-searched contacts → CSV for the email search
 stats                                    # row counts, companies without a contact, tiers
 ```
 

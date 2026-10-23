@@ -7,8 +7,8 @@ final status. Polling is capped by Icypeas at 30 calls/min, so it reads up to 10
 The script holds no run values: the input file, its column names and the output file are flags.
 
 Sample, then scale:
-    S=.claude/skills/enrich-emails/scripts/icypeas_email_search.py
-    python3 $S --probe                                                                 # key check, free
+    S=.claude/skills/icypeas-email-fetch/scripts/icypeas_email_search.py
+    python3 $S --probe --account-email YOU@COMPANY.COM                                 # key + credits check, free
     python3 $S --contacts IN.csv --output data/processed/contacts_email_enriched_<date>.csv \
       --first-name-column first_name --last-name-column last_name \
       --domain-column company_domain --id-column person_linkedin_url \
@@ -45,6 +45,7 @@ ERROR_LOG = ROOT / "logs" / "icypeas_email_search_errors.log"
 # Icypeas API facts (docs/icypeas-api-reference.md), not run settings.
 SEARCH_URL = "https://app.icypeas.com/api/email-search"
 READ_URL = "https://app.icypeas.com/api/bulk-single-searchs/read"
+SUBSCRIPTION_URL = "https://app.icypeas.com/api/a/actions/subscription-information"
 MAX_SUBMIT_RPS = 10      # /email-search limit
 MAX_READS_PER_MIN = 30   # /bulk-single-searchs/read limit (polling)
 READ_PAGE = 100          # max results per read call
@@ -175,6 +176,22 @@ def read_round(api_key, waiting_ids, limiter):
     return found
 
 
+def credit_fields(obj, path=""):
+    """Every number in the subscription response whose key mentions credits, as (path, value)."""
+    found = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            here = f"{path}.{k}" if path else k
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and "credit" in here.lower():
+                found.append((here, v))
+            else:
+                found += credit_fields(v, here)
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            found += credit_fields(v, f"{path}[{i}]")
+    return found
+
+
 def main():
     global ENV_FILE
     LOG_FILE.parent.mkdir(exist_ok=True)
@@ -193,7 +210,8 @@ def main():
     parser.add_argument("--limit", type=int, help="submit at most N new people this run (sample / next batch)")
     parser.add_argument("--resume", action="store_true", help="continue a run: poll what's pending, submit the rest")
     parser.add_argument("--dry-run", action="store_true", help="print the requests; call nothing")
-    parser.add_argument("--probe", action="store_true", help="one free read call to check the API key, then exit")
+    parser.add_argument("--probe", action="store_true", help="check the API key (and credits with --account-email), then exit")
+    parser.add_argument("--account-email", help="--probe: the Icypeas account's login email, to read the credit balance")
     parser.add_argument("--submit-rps", type=float, default=5, help=f"searches sent per second (max {MAX_SUBMIT_RPS})")
     parser.add_argument("--reads-per-min", type=float, default=27, help=f"polling reads per minute (max {MAX_READS_PER_MIN})")
     parser.add_argument("--poll-every", type=int, default=10, help="seconds between polling rounds")
@@ -213,6 +231,18 @@ def main():
                     read_limiter, "probe", attempts=1)
         ok = bool(resp and resp.get("success"))
         logging.info("Icypeas key: %s", "PASS" if ok else f"FAIL (see {ERROR_LOG.relative_to(ROOT)})")
+        if ok and args.account_email:
+            sub = post(env_get("ICYPEAS_API_KEY"), SUBSCRIPTION_URL, {"email": args.account_email},
+                       read_limiter, "subscription", attempts=1)
+            credits = credit_fields(sub) if sub and sub.get("success") else []
+            if credits:
+                for name, value in credits:
+                    logging.info("Icypeas credits: %s = %s", name, value)
+            else:
+                ok = False
+                logging.info("Icypeas credits: FAIL, no credit balance returned (see %s)", ERROR_LOG.relative_to(ROOT))
+                if sub:
+                    log_error("subscription", json.dumps(sub)[:1000], {"email": "<account email>"})
         sys.exit(0 if ok else 1)
 
     # No defaults: a forgotten flag stops the run instead of guessing.
