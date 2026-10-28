@@ -17,8 +17,8 @@ Every setting can be overridden for a run (--model, --effort, --temperature, --t
 the settings actually used are written to the row. {{variables}} are filled from the CSV's columns of the same
 name, or from the column --var NAME=COLUMN points to. API facts: docs/openai-api-reference.md.
 
-    S=.claude/skills/mail-merge-variables/scripts/openai_stage.py
-    F=(--input data/processed/mailable_contacts_<date>.csv --prompt docs/prompts/stage1_insight_v2.md
+    S=.claude/skills/variable-llm-pipeline/scripts/openai_stage.py
+    F=(--input data/processed/mailable_contacts_<date>.csv --prompt docs/prompts/opener/stage1_insight_v2.md
        --output-column insight --variant-when "A:about_me>=50" --variant-default B --checks review)
     python3 $S --probe "${F[@]}"              # key, model, settings combination (free)
     python3 $S "${F[@]}" --limit 1 --dry-run  # print the exact prompt for the next row, no calls

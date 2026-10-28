@@ -8,7 +8,7 @@ The owner is not a developer. Explain work in plain English and make technical c
 
 | Folder | What goes here | Examples |
 |---|---|---|
-| `docs/` | Strategy and written work: ICP, personas, messaging, sequences, campaign briefs, research notes, results write-ups | `docs/icp.md`, `docs/personas.md`, `docs/sequences/email-v1.md`, `docs/campaign-brief.md` |
+| `docs/` | Strategy and written work: ICP, personas, messaging, sequences, campaign briefs, research notes, results write-ups. LLM prompt files in `docs/prompts/<variable>/` | `docs/icp.md`, `docs/personas.md`, `docs/sequences/email-v1.md`, `docs/campaign-brief.md` |
 | `data/raw/` | Files exactly as they came in — never edited | Clay / Apollo / LinkedIn exports, purchased lists |
 | `data/processed/` | Cleaned, deduped, enriched versions of raw files | `accounts_clean_2026-10-19.csv` |
 | `data/exports/` | Final lists ready to load into a sending tool or CRM | `smartlead_upload_tier-a.csv` |
@@ -35,9 +35,9 @@ The owner is not a developer. Explain work in plain English and make technical c
 - Never print, echo or paste `.env` values. When checking `.env`, first look at it masked (`sed -E 's/[A-Za-z0-9]/x/g' .env`), then report only key names and whether they're filled in.
 - `.env`, the database, data files and logs are all in `.gitignore` — prospect data is personal information and must not be committed.
 
-## The skills (list building + suppression + emails + validation + tech stack)
+## The skills (list building + suppression + emails + validation + tech stack + LLM variables)
 
-All pipeline code lives in six local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
+All pipeline code lives in seven local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
 
 - **`/fetch-companies-push`** (`.claude/skills/fetch-companies-push/`): Blitz company search → `gtm.companies`. Ends by offering the contacts skill.
 - **`/fetch-contacts-push`** (`.claude/skills/fetch-contacts-push/`): reads companies from Supabase → Blitz contact search (title cascade via Waterfall ICP, or a single designation via People Search) → `gtm.contacts`.
@@ -45,6 +45,7 @@ All pipeline code lives in six local project skills, each with `SKILL.md`, `scri
 - **`/icypeas-email-fetch`** (`.claude/skills/icypeas-email-fetch/`, own `.env.template`): CSV or Supabase export → Icypeas email search (submit, then poll) → `gtm.contacts` email columns. Gates: probe (key + credits) → 5 → 100 → rest (batches of 50,000 when large) → push.
 - **`/debounce-email-validate`** (`.claude/skills/debounce-email-validate/`, own `.env.template`): email CSV → Debounce validation (synchronous, ≤5 at once) → `gtm.contacts.email_validation` (Debounce `result`). Gates: probe (key + credits) → 5 → 100 → rest → push.
 - **`/detectzestack-tech-stack`** (`.claude/skills/detectzestack-tech-stack/`, own `.env.template`): companies CSV or Supabase export → DetectZeStack scan (RapidAPI, synchronous) → full stack to `gtm.companies.tech_stack`; per-client signals distilled to a CSV via a Claude-written `docs/<client>-tech-distiller.md` → config JSON. Gates: 1 → 10 → client distiller + ranking → 100 (hit rate, projection) → full → distil → push. Distilled signals never go to Supabase.
+- **`/variable-llm-pipeline`** (`.claude/skills/variable-llm-pipeline/`, own `.env.template`): a CSV column that needs judgment (e.g. `{OPENER}`) via OpenAI GPT-6 Luna. `scripts/openai_stage.py` runs ONE prompt file per run (no stage logic); a pipeline is several runs, each later prompt reading earlier columns. Prompts live only in `docs/prompts/<variable>/stage<N>_<job>_v<K>.md` (settings in the file header; never edit a version that has run). Gates: design → prompts → probe → dry run → 1 → 10 → iterate on a separate sample sheet (10, 20, 30…) → scale choice (now vs Batch, Batch not built yet) → full run. Rule-based variables (`{ROLE}`, `{PS_LINE}`) are never LLM calls: deterministic scripts, e.g. `.claude/skills/mail-merge-variables/scripts/role_variable.py`.
 
 The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project (creating `data/` and `logs/` if missing) and read `.env` from it, so run them from the project root. Every script, including `probe_connections.sh`, takes `--env PATH` for a `.env` stored elsewhere.
 
@@ -82,6 +83,7 @@ Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad r
 - Blitz (people/company data, emails): `docs/blitz-api-reference.md`. Our plan is a free trial with ~1,000 records/month and 5 req/s per endpoint, so cap every pull.
 - Icypeas (email finder): `docs/icypeas-api-reference.md`. Async: submit, then poll. Polling for results is capped at 30 calls/min, so read in pages of 100. Auth is the API key alone; the secret only verifies webhooks.
 - Debounce (email validation): `docs/debounce-api-reference.md`. Synchronous, 5 calls at once, 1 credit each. The key travels in the URL (`api=`), so never log request URLs. Never use bulk upload (needs the list on a public URL).
+- OpenAI (LLM variables): `docs/openai-api-reference.md`. Responses API; GPT-6 Luna $0.10/$0.50 per 1M tokens; `temperature`, `top_p` and log-probabilities only with effort `none`. Key `OPENAI_API_KEY`.
 - DetectZeStack (tech stack, via RapidAPI): `docs/detectzestack-api-reference.md`. Synchronous `GET /analyze?url=`. Free plan 100 calls/month and **RapidAPI counts every call** (failures too). Needs a browser-style User-Agent. Headers `x-rapidapi-key` + `x-rapidapi-host`.
 
 ## Database tables (Supabase, schema `gtm`)
