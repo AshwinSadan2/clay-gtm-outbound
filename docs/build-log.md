@@ -4,6 +4,12 @@ Running record of what was built, decided and run in this project, newest sessio
 
 ---
 
+## Session 4 — 2026-10-27 · Debounce validation, DetectZeStack tech stack, migration 005, two skills
+
+Full log: `docs/build-log-2026-10-27.md`.
+
+---
+
 ## Session 3 — 2026-10-23 · Icypeas email enrichment, migration 004, `icypeas-email-fetch` skill
 
 **Goal:** find work emails for the clean contact list with Icypeas, store them permanently in Supabase, and package the flow as a skill.
