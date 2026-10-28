@@ -7,7 +7,7 @@ stops before going over. The script holds no run values: the input file, its col
 file are flags.
 
 Sample, then scale:
-    S=.claude/skills/detectzestack-tech-fetch/scripts/detectzestack_tech_search.py
+    S=.claude/skills/detectzestack-tech-stack/scripts/detectzestack_tech_search.py
     python3 $S --input data/processed/companies_supabase_<date>.csv \
       --output data/processed/companies_tech_enriched_<date>.csv \
       --url-column domain --id-column domain --limit 5 --dry-run                       # show the sites, no calls

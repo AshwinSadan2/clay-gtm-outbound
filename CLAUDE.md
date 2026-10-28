@@ -35,15 +35,16 @@ The owner is not a developer. Explain work in plain English and make technical c
 - Never print, echo or paste `.env` values. When checking `.env`, first look at it masked (`sed -E 's/[A-Za-z0-9]/x/g' .env`), then report only key names and whether they're filled in.
 - `.env`, the database, data files and logs are all in `.gitignore` — prospect data is personal information and must not be committed.
 
-## The skills (list building + suppression + emails + validation)
+## The skills (list building + suppression + emails + validation + tech stack)
 
-All pipeline code lives in five local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
+All pipeline code lives in six local project skills, each with `SKILL.md`, `scripts/`, `references/` and `assets/`:
 
 - **`/fetch-companies-push`** (`.claude/skills/fetch-companies-push/`): Blitz company search → `gtm.companies`. Ends by offering the contacts skill.
 - **`/fetch-contacts-push`** (`.claude/skills/fetch-contacts-push/`): reads companies from Supabase → Blitz contact search (title cascade via Waterfall ICP, or a single designation via People Search) → `gtm.contacts`.
 - **`/suppression-gate`** (`.claude/skills/suppression-gate/`, with its own `.env.template`): Attio suppression in three gated stages: `attio_profile.py` → `attio_download.py` → `attio_suppress.py` (preview, then `--apply`). Flags: `--level domain|contact`, `--categories`, `--days` (default 90). CSV output only, never a DB change. **Contact level matches on email only and never runs without emails.** Agreed rules: `docs/build-log.md` Session 2.
 - **`/icypeas-email-fetch`** (`.claude/skills/icypeas-email-fetch/`, own `.env.template`): CSV or Supabase export → Icypeas email search (submit, then poll) → `gtm.contacts` email columns. Gates: probe (key + credits) → 5 → 100 → rest (batches of 50,000 when large) → push.
 - **`/debounce-email-validate`** (`.claude/skills/debounce-email-validate/`, own `.env.template`): email CSV → Debounce validation (synchronous, ≤5 at once) → `gtm.contacts.email_validation` (Debounce `result`). Gates: probe (key + credits) → 5 → 100 → rest → push.
+- **`/detectzestack-tech-stack`** (`.claude/skills/detectzestack-tech-stack/`, own `.env.template`): companies CSV or Supabase export → DetectZeStack scan (RapidAPI, synchronous) → full stack to `gtm.companies.tech_stack`; per-client signals distilled to a CSV via a Claude-written `docs/<client>-tech-distiller.md` → config JSON. Gates: 1 → 10 → client distiller + ranking → 100 (hit rate, projection) → full → distil → push. Distilled signals never go to Supabase.
 
 The scripts hold no campaign values. Every filter, title cascade and input file is a flag, so **never edit the scripts for a new campaign**: take the values from the new brief or ask the user. Every run follows: dry run → sign-off → 10-record sample → profile → scale → ask → push. Scripts treat the folder they're run from as the project (creating `data/` and `logs/` if missing) and read `.env` from it, so run them from the project root. Every script, including `probe_connections.sh`, takes `--env PATH` for a `.env` stored elsewhere.
 
@@ -56,6 +57,8 @@ load-companies FILE / load-contacts FILE # upsert into gtm.companies (domain) / 
 load-emails FILE --id-column COL        # email-enrichment CSV → email columns of existing contacts (update only)
 load-validation FILE --id-column COL    # email-validation CSV → email_validation(_at), only where the stored email matches
 export-companies [--all]                 # companies with no contact yet (--all: every company) → CSV for the contact search
+export-companies --email-validation V --tech not-scanned|scanned --output FILE   # filters combine; scanned adds tech_stack
+load-tech FILE --id-column domain       # tech-stack CSV → tech_stack + tech_enriched_at (update only)
 export-contacts [--all] [--exclude-domains FILE --exclude-column COL]  # never email-searched contacts → CSV for the email search
 stats                                    # row counts, companies without a contact, tiers
 ```
@@ -79,12 +82,13 @@ Loads are upserts: re-running is safe and leaves unchanged rows untouched. Bad r
 - Blitz (people/company data, emails): `docs/blitz-api-reference.md`. Our plan is a free trial with ~1,000 records/month and 5 req/s per endpoint, so cap every pull.
 - Icypeas (email finder): `docs/icypeas-api-reference.md`. Async: submit, then poll. Polling for results is capped at 30 calls/min, so read in pages of 100. Auth is the API key alone; the secret only verifies webhooks.
 - Debounce (email validation): `docs/debounce-api-reference.md`. Synchronous, 5 calls at once, 1 credit each. The key travels in the URL (`api=`), so never log request URLs. Never use bulk upload (needs the list on a public URL).
+- DetectZeStack (tech stack, via RapidAPI): `docs/detectzestack-api-reference.md`. Synchronous `GET /analyze?url=`. Free plan 100 calls/month and **RapidAPI counts every call** (failures too). Needs a browser-style User-Agent. Headers `x-rapidapi-key` + `x-rapidapi-host`.
 
 ## Database tables (Supabase, schema `gtm`)
 
 Never touch the `public` schema: it belongs to an unrelated movies project.
 
-- `gtm.companies` — target companies. Primary key `domain` (case-insensitive `citext`). Design: `docs/schema-companies.md`
+- `gtm.companies` — target companies. Primary key `domain` (case-insensitive `citext`). Tech stack: `tech_stack` (jsonb type → tools) + `tech_enriched_at` (migration 005). Design: `docs/schema-companies.md`
 - `gtm.contacts` — one marketing/RevOps leader per company. Primary key `linkedin_url`; `company_domain` → `companies.domain`. Design: `docs/schema-contacts.md`
 - Both keep the full API response in a `raw` jsonb column. No surrogate ID keys.
 - Every schema change is a new numbered file in `db/migrations/`.

@@ -2,7 +2,7 @@
 
 Sources, read 2026-10-27: the provider's OpenAPI spec (`https://detectzestack.com/openapi.yaml`), `llms.txt`,
 the pricing page, and the RapidAPI listing (https://rapidapi.com/mlugoapx/api/detectzestack). Facts marked
-**live** were confirmed with our own key. Used by `.claude/skills/detectzestack-tech-fetch/scripts/detectzestack_tech_search.py`.
+**live** were confirmed with our own key. Used by `.claude/skills/detectzestack-tech-stack/scripts/detectzestack_tech_search.py`.
 
 What it does: give it a website, get back the technologies the site runs (CMS, frameworks, CDN, hosting,
 analytics, marketing tools, payments, security), each with categories, a confidence score and, when known, a

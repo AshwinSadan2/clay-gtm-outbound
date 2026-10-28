@@ -8,7 +8,7 @@ Two steps:
             full results CSV written by detectzestack_tech_search.py, or a Supabase export
             (data.py export-companies --tech scanned).
 
-    S=.claude/skills/detectzestack-tech-fetch/scripts/distill_tech_stack.py
+    S=.claude/skills/detectzestack-tech-stack/scripts/distill_tech_stack.py
     python3 $S config --doc docs/<client>-tech-distiller.md --config data/processed/distiller_<client>_<date>.json
     python3 $S distill --config data/processed/distiller_<client>_<date>.json \
       --input data/processed/tech_stack_companies_<date>.csv \
