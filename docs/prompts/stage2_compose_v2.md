@@ -6,6 +6,12 @@
 
 **Model:** GPT-6 Luna (`gpt-6-luna`, cheap). Small, literal job: angle in → one clean opening line out.
 
+**Output field:** `opener`
+
+**Effort:** none (log-probability confidence needs none; temperature/top p would also need it)
+
+**Max output tokens:** 1000
+
 **Where the opener lands (Email 1, from the brief §2h):**
 > Hey {{first_name}}, **{{OPENER}}**
 > We have been talking to a lot of {{role}} like you, and kept hearing the same thing. Their enrichment tool pulls from one source, so half their records land empty.

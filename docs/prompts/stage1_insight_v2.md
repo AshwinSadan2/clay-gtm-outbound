@@ -6,6 +6,12 @@
 
 **Model:** GPT-6 Luna (`gpt-6-luna`, cheap). Keep the model's job small and literal, which is why this is a separate call.
 
+**Output field:** `angle`
+
+**Effort:** none (log-probability confidence needs none; temperature/top p would also need it)
+
+**Max output tokens:** 1000
+
 **Two variants below.** Variant A runs on the **contact's** LinkedIn About; Variant B is the **fallback** for contacts with no personal About, or one shorter than the script's `--min-about-words` (50 for this campaign), and runs on the **company's** About instead. The script picks the variant per row.
 
 **Output contract:** the script enforces a strict JSON schema `{"angle": "Observation: ... Likely pain: ..."}`. The model returns only that line, nothing else.
