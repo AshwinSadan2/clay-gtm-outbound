@@ -8,7 +8,9 @@ Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip inst
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-contacts FILE [--limit N]    # upsert into gtm.contacts on person_linkedin_url
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-emails FILE --id-column COL [--limit N]   # email-enrichment CSV -> email columns of existing contacts
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-validation FILE --id-column COL [--limit N]   # email-validation CSV -> email_validation(_at)
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-tech FILE --id-column COL [--limit N]   # tech-stack CSV -> tech_stack(_enriched_at)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies --email-validation "Safe to Send,Risky"   # companies with a sendable contact email
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-contacts [--all] [--exclude-domains FILE --exclude-column COL]
                                                                     # contacts CSV for email enrichment (default: never searched)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py stats                   # row counts and link checks
@@ -23,6 +25,8 @@ load-emails only updates contacts already in gtm.contacts: --id-column names the
 person's LinkedIn URL (matched on person_linkedin_url). It never inserts. It reads the CSV columns named after
 the database columns (EMAIL_COLUMNS); email_status is computed by the database (migration 004).
 load-validation works the same way and only applies a result when the contact's stored email is the one validated.
+load-tech updates gtm.companies (matched on domain): tech_stack, tech_enriched_at (migration 005). A failed scan's
+row has a date but no stack, so the company reads "attempted, failed" rather than "never tried".
 Migrations use SUPABASE_DB_URL_DIRECT; loads use SUPABASE_DB_URL_POOLER (transaction pooler, port 6543).
 """
 import argparse
@@ -255,6 +259,48 @@ def load_validation(file, id_column, limit=None):
                  updated, unchanged, skipped, errors, f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "")
 
 
+# Tech-stack CSV column (detectzestack_tech_search.py) -> gtm.companies column (migration 005).
+TECH_COLUMNS = {"tech_stack": "tech_stack", "tech_enriched_at": "tech_enriched_at"}
+TECH_SQL = """
+update gtm.companies set tech_stack = %(tech_stack)s::jsonb, tech_enriched_at = %(tech_enriched_at)s::timestamptz
+where domain = %(key)s
+  and (tech_stack, tech_enriched_at) is distinct from (%(tech_stack)s::jsonb, %(tech_enriched_at)s::timestamptz)
+returning 1
+"""
+
+
+def load_tech(file, id_column, limit=None):
+    """Write tech-stack results to existing companies (update only, matched on domain). The raw response and
+    campaign signals stay in the CSV."""
+    updated = unchanged = skipped = errors = 0
+    with connect(pooled=True) as conn, open(file, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in [id_column] + list(TECH_COLUMNS) if c not in reader.fieldnames]
+        if missing:
+            sys.exit(f"{file} is missing columns: {missing}")
+        for row in reader:
+            if limit is not None and updated + unchanged >= limit:
+                break
+            key = row[id_column].strip()
+            try:
+                params = {"key": key, **{db: row[c].strip() or None for c, db in TECH_COLUMNS.items()}}
+                if params["tech_stack"] is not None:
+                    json.loads(params["tech_stack"])  # fail this row, not the load, on a broken cell
+                if conn.execute(TECH_SQL, params).fetchone():
+                    updated += 1
+                elif conn.execute("select 1 from gtm.companies where domain = %s", (key,)).fetchone():
+                    unchanged += 1
+                else:
+                    skipped += 1
+                    logging.info("skipped %s: company not in gtm.companies", key)
+            except (psycopg.Error, ValueError, KeyError) as e:
+                errors += 1
+                log_error("companies.tech_stack", key, e,
+                          {k: v for k, v in row.items() if k not in ("raw", "tech_raw")})
+    logging.info("companies tech_stack: %d updated, %d unchanged, %d skipped (not in gtm.companies), %d errors%s",
+                 updated, unchanged, skipped, errors, f" (see {ERROR_LOG.relative_to(ROOT)})" if errors else "")
+
+
 def stats():
     with connect(pooled=True) as conn:
         for label, sql in [
@@ -274,25 +320,33 @@ def stats():
         checked = conn.execute("select coalesce(email_validation, 'not validated'), count(*) from gtm.contacts "
                                "where email is not null group by 1 order by 1").fetchall()
         print("emails by email_validation   " + ", ".join(f"{s}: {n}" for s, n in checked))
+        print(f"{'companies tech-scanned':<28} "
+              f"{conn.execute('select count(*) from gtm.companies where tech_enriched_at is not null').fetchone()[0]}")
 
 
-def export_companies(include_with_contact):
-    """Write companies from gtm.companies (by default only those with no contact yet) to a CSV
-    the contact search can read. Returns the file path."""
+def export_companies(include_with_contact, email_validation=None):
+    """Write companies from gtm.companies to a CSV. Default: only those with no contact yet (for the contact
+    search). With `email_validation` (a list of values): only companies whose contact's email has one of
+    those validation results (e.g. for tech-stack enrichment). Returns the file path."""
     out = ROOT / "data" / "processed" / f"companies_supabase_{date.today().isoformat()}.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
-    sql = "select name, domain, linkedin_url from gtm.companies c"
-    if not include_with_contact:
+    sql, params = "select name, domain, website, linkedin_url from gtm.companies c", ()
+    if email_validation:
+        sql += (" where exists (select 1 from gtm.contacts p where p.company_domain = c.domain"
+                " and p.email_validation = any(%s))")
+        params = (email_validation,)
+    elif not include_with_contact:
         sql += " where not exists (select 1 from gtm.contacts p where p.company_domain = c.domain)"
     rows = 0
     with connect(pooled=True) as conn, open(out, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["name", "domain", "linkedin_url"])
-        for row in conn.execute(sql + " order by domain"):
+        writer.writerow(["name", "domain", "website", "linkedin_url"])
+        for row in conn.execute(sql + " order by domain", params):
             writer.writerow(row)
             rows += 1
-    logging.info("exported %d companies%s to %s", rows,
-                 "" if include_with_contact else " without a contact", out.relative_to(ROOT))
+    which = (f" whose contact's email_validation is {' / '.join(email_validation)}" if email_validation
+             else "" if include_with_contact else " without a contact")
+    logging.info("exported %d companies%s to %s", rows, which, out.relative_to(ROOT))
     return out
 
 
@@ -349,25 +403,29 @@ def main():
     )
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["migrate", "load", "load-companies", "load-contacts", "load-emails",
-                                            "load-validation", "export-companies", "export-contacts", "stats"])
-    parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts / load-emails / load-validation)")
+                                            "load-validation", "load-tech", "export-companies", "export-contacts", "stats"])
+    parser.add_argument("file", nargs="?", help="CSV to load (load-companies / load-contacts / load-emails / load-validation / load-tech)")
     parser.add_argument("--companies", help="companies CSV (load command)")
     parser.add_argument("--contacts", help="contacts CSV (load command)")
     parser.add_argument("--limit", type=int, help="max rows to load this run (sample-before-scale)")
-    parser.add_argument("--id-column", help="load-emails / load-validation: CSV column holding the person's LinkedIn URL")
+    parser.add_argument("--id-column", help="load-emails / load-validation: CSV column holding the person's LinkedIn URL; "
+                        "load-tech: CSV column holding the company domain")
     parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     parser.add_argument("--all", action="store_true", help="export-companies: include companies that already have a "
                         "contact; export-contacts: include contacts already email-searched")
     parser.add_argument("--exclude-domains", help="export-contacts: CSV of company domains to leave out (e.g. suppression)")
     parser.add_argument("--exclude-column", help="export-contacts: the domain column in --exclude-domains")
+    parser.add_argument("--email-validation", help="export-companies: only companies whose contact's email_validation "
+                        "is one of these comma-separated values (e.g. 'Safe to Send,Risky')")
     args = parser.parse_args()
     global ENV_FILE
     if args.env:
         ENV_FILE = Path(args.env).expanduser().resolve()
     if args.command.startswith("load-") and not args.file:
         parser.error(f"{args.command} needs a CSV file")
-    if args.command in ("load-emails", "load-validation") and not args.id_column:
-        parser.error(f"{args.command} needs --id-column COL (the CSV column holding the LinkedIn URL)")
+    if args.command in ("load-emails", "load-validation", "load-tech") and not args.id_column:
+        parser.error(f"{args.command} needs --id-column COL (the CSV column holding the "
+                     f"{'company domain' if args.command == 'load-tech' else 'LinkedIn URL'})")
     if bool(args.exclude_domains) != bool(args.exclude_column):
         parser.error("--exclude-domains and --exclude-column go together")
     if args.command == "load" and not (args.companies and args.contacts):
@@ -389,8 +447,10 @@ def main():
         load_emails(args.file, args.id_column, limit=args.limit)
     elif args.command == "load-validation":
         load_validation(args.file, args.id_column, limit=args.limit)
+    elif args.command == "load-tech":
+        load_tech(args.file, args.id_column, limit=args.limit)
     elif args.command == "export-companies":
-        export_companies(args.all)
+        export_companies(args.all, [v.strip() for v in args.email_validation.split(",")] if args.email_validation else None)
     elif args.command == "export-contacts":
         export_contacts(args.all, args.exclude_domains, args.exclude_column)
     else:

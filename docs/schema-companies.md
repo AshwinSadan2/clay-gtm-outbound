@@ -52,3 +52,27 @@ create table gtm.companies (
 | `hq_country_code` | 300 | Always "US" (our filter) |
 | `about` | 300 | 34–1,985 chars |
 | `raw` | 300 | Full Blitz company record, 14 keys |
+
+## 4. Tech-stack columns (migration 005, 2026-10-27)
+
+Source: DetectZeStack `/analyze` via RapidAPI (`docs/detectzestack-api-reference.md`), loaded by
+`data.py load-tech FILE --id-column domain` (update only, matched on `domain`).
+
+| Column | Type | Filled by | Meaning |
+|---|---|---|---|
+| `tech_stack` | `jsonb` | loader (CSV `tech_stack`) | Type → tools map: `{"CRM": ["HubSpot"], "Analytics": ["Google Analytics"], ...}`. `{}` = scanned, nothing detected |
+| `tech_enriched_at` | `timestamptz` | loader | When we ran DetectZeStack (UTC), set for every attempted company, failures included |
+
+Rules:
+- States: both null = never tried · date only = tried, scan failed · `{}` + date = nothing detected · map + date = scanned.
+- A stack never exists without the date, and is always a JSON object.
+- GIN index (`jsonb_path_ops`): `tech_stack @> '{"CRM": ["HubSpot"]}'` is fast. Any-type search:
+  `jsonb_path_exists(tech_stack, '$.*[*] ? (@ == "HubSpot")')`.
+
+Decisions:
+| Decision | Why |
+|---|---|
+| One map column instead of separate technology and category lists | It holds every tool and its type (all 1,072 detections checked); a tool can sit under two types |
+| No raw response | Stays in `data/processed/tech_stack_companies_<date>.csv` (`tech_raw`) and `data/raw/*.jsonl` |
+| No distilled campaign signal (`tech_tool` / `tech_type`) | Campaign-specific and transient: lives in `distilled_tech_stack_companies_<date>.csv`, re-derived per client |
+| No count, scan depth, status code, cache flag | Derivable or troubleshooting-only; kept in the CSV |
