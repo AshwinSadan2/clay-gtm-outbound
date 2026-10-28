@@ -12,11 +12,13 @@ Per row: Variant A if the contact About (--about-column) has at least --min-abou
 
     S=.claude/skills/mail-merge-variables/scripts/openai_opener.py
     F=(--input data/processed/mailable_contacts_<date>.csv --insight-prompt docs/prompts/stage1_insight_v1.md
-       --compose-prompt docs/prompts/stage2_compose_v1.md --min-about-words 50)
+       --compose-prompt docs/prompts/stage2_compose_v1.md --min-about-words 50
+       --max-words-a 20 --max-words-b 15)
     python3 $S --probe ...F                  # key works + both models available (free)
     python3 $S ...F --limit 1 --dry-run      # print the exact prompts for the next row, no calls
     python3 $S ...F --limit 1                # first row
-    python3 $S ...F --resume --limit 10      # next 10 (never re-pays for a done row)
+    python3 $S ...F --resume --limit 10      # next 10 (never re-pays for a row done with these prompt versions)
+A new prompt version (e.g. _v2.md) counts as not done for every row; the CSV keeps the latest result per row.
 
 Writes (after every row, so a crash loses nothing):
     data/raw/openers_<input name>.jsonl   one line per row: id, variant, both requests' outputs + usage, untouched
@@ -197,19 +199,25 @@ def usage_cost(model, usage):
     return inp, out, ((inp - cached) * p_in + cached * p_cached + out * p_out) / 1_000_000
 
 
-def check_opener(opener, first_name):
-    """Rule checks from the compose prompt: flag, never fix."""
+def check_opener(opener, first_name, max_words, angle, review_phrases):
+    """Rule checks from the compose prompt, plus insights that admit no link: flag, never fix."""
     flags = []
     if not opener:
         return "empty"
     if re.search(r"[—–]|\s-\s|\s-$|^-", opener):
         flags.append("dash")
-    if len(opener.split()) > 20:
+    if len(opener.split()) > max_words:
         flags.append(f"{len(opener.split())} words")
+    if opener.count(",") >= 3 or re.search(r",[^,]+,[^,]+\band\b", opener):
+        flags.append("list")
+    if re.search(r"\b(19|20)\d\d\b", opener):
+        flags.append("dated")
     if "?" in opener:
         flags.append("question")
     if re.match(r"(hey|hi|hello)\b", opener, re.I) or (first_name and re.match(rf"{re.escape(first_name)}\b", opener, re.I)):
         flags.append("repeats greeting")
+    if any(ph in (angle or "").lower().replace("\u2019", "'") for ph in review_phrases):  # curly apostrophes
+        flags.append("review: insight found no clear link")
     return "; ".join(flags)
 
 
@@ -230,6 +238,11 @@ def main():
     ap.add_argument("--insight-prompt", required=True, help="Stage 1 prompt .md")
     ap.add_argument("--compose-prompt", required=True, help="Stage 2 prompt .md")
     ap.add_argument("--min-about-words", type=int, required=True, help="contact About shorter than this -> Variant B")
+    ap.add_argument("--max-words-a", type=int, required=True, help="opener word limit, Variant A (flag only)")
+    ap.add_argument("--max-words-b", type=int, required=True, help="opener word limit, Variant B (flag only)")
+    ap.add_argument("--review-phrases", default="unclear,doesn't describe,does not describe,no specific,not clear,"
+                    "no clear,no direct,doesn't mention,does not mention,not mentioned",
+                    help="comma list: an insight containing one gets a review flag")
     ap.add_argument("--about-column", default="about_me")
     ap.add_argument("--id-column", default="person_linkedin_url")
     ap.add_argument("--first-name-column", default="first_name")
@@ -273,16 +286,18 @@ def main():
                 logging.warning("probe: no price for %s, cost will be blank", p["model"])
         return
 
+    review_phrases = [ph.strip().lower() for ph in args.review_phrases.split(",") if ph.strip()]
+    versions = [p1["version"], p2["version"]]
     raw = ROOT / "data" / "raw" / f"openers_{Path(args.input).stem}.jsonl"
     raw.parent.mkdir(parents=True, exist_ok=True)
     done = {}
     if raw.exists():
         for line in raw.read_text().splitlines():
             rec = json.loads(line)
-            if rec.get("ok"):
+            if rec.get("ok") and rec.get("prompts") == versions:  # a new prompt version re-runs every row
                 done[rec["id"]] = rec
     if done and not args.resume and not args.dry_run:
-        sys.exit(f"{len(done)} rows already done in {raw}: add --resume to continue")
+        sys.exit(f"{len(done)} rows already done with {' + '.join(versions)} in {raw}: add --resume to continue")
 
     todo = [r for r in rows if r[args.id_column] not in done][: args.limit]
     logging.info("%d rows, %d done, %d this run | %s + %s | effort %s | Variant B under %d words",
@@ -336,7 +351,9 @@ def main():
                     "input_tokens": i1 + i2, "output_tokens": o1 + o2, "cost_usd": "" if cost is None else f"{cost:.6f}",
                     "insight_confidence": "" if conf1 is None else conf1,
                     "opener_confidence": "" if conf2 is None else conf2,
-                    "opener_flags": check_opener(opener, row.get(args.first_name_column, "")),
+                    "opener_flags": check_opener(opener, row.get(args.first_name_column, ""),
+                                                 args.max_words_a if variant == "A" else args.max_words_b,
+                                                 angle, review_phrases),
                     "opener_model": " + ".join(dict.fromkeys([p1["model"], p2["model"]])),
                     "opener_prompts": f"{p1['version']} + {p2['version']}", "opener_at": rec["at"]})
                 done[rid] = rec
