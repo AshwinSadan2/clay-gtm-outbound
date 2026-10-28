@@ -10,7 +10,8 @@ Usage (needs the project virtualenv: python3 -m venv .venv && .venv/bin/pip inst
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-validation FILE --id-column COL [--limit N]   # email-validation CSV -> email_validation(_at)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py load-tech FILE --id-column COL [--limit N]   # tech-stack CSV -> tech_stack(_enriched_at)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies [--all]  # companies CSV for the contact search
-    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies --email-validation "Safe to Send,Risky"   # companies with a sendable contact email
+    .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-companies --email-validation "Safe to Send,Risky" \
+        [--tech not-scanned|scanned] [--output FILE]   # filters combine; --tech scanned adds tech_stack (to distil from the DB)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py export-contacts [--all] [--exclude-domains FILE --exclude-column COL]
                                                                     # contacts CSV for email enrichment (default: never searched)
     .venv/bin/python .claude/skills/fetch-contacts-push/scripts/data.py stats                   # row counts and link checks
@@ -324,29 +325,43 @@ def stats():
               f"{conn.execute('select count(*) from gtm.companies where tech_enriched_at is not null').fetchone()[0]}")
 
 
-def export_companies(include_with_contact, email_validation=None):
-    """Write companies from gtm.companies to a CSV. Default: only those with no contact yet (for the contact
-    search). With `email_validation` (a list of values): only companies whose contact's email has one of
-    those validation results (e.g. for tech-stack enrichment). Returns the file path."""
-    out = ROOT / "data" / "processed" / f"companies_supabase_{date.today().isoformat()}.csv"
+def export_companies(include_with_contact, email_validation=None, tech=None, output=None):
+    """Write companies from gtm.companies to a CSV. With no filter: only those with no contact yet (for the
+    contact search; --all: every company). Filters combine (AND):
+      email_validation  only companies whose contact's email_validation is one of these values
+      tech              "not-scanned": never tech-scanned (to scan next) · "scanned": has a tech_stack, exported
+                        with tech_stack + tech_enriched_at (to distil from the database)
+    Returns the file path."""
+    out = Path(output) if output else ROOT / "data" / "processed" / f"companies_supabase_{date.today().isoformat()}.csv"
+    if not out.is_absolute():
+        out = ROOT / out
     out.parent.mkdir(parents=True, exist_ok=True)
-    sql, params = "select name, domain, website, linkedin_url from gtm.companies c", ()
+    columns = ["name", "domain", "website", "linkedin_url"] + (["tech_stack", "tech_enriched_at"] if tech == "scanned" else [])
+    where, params, which = [], [], []
     if email_validation:
-        sql += (" where exists (select 1 from gtm.contacts p where p.company_domain = c.domain"
-                " and p.email_validation = any(%s))")
-        params = (email_validation,)
-    elif not include_with_contact:
-        sql += " where not exists (select 1 from gtm.contacts p where p.company_domain = c.domain)"
+        where.append("exists (select 1 from gtm.contacts p where p.company_domain = c.domain"
+                     " and p.email_validation = any(%s))")
+        params.append(email_validation)
+        which.append(f"contact's email_validation is {' / '.join(email_validation)}")
+    if tech == "not-scanned":
+        where.append("c.tech_enriched_at is null")
+        which.append("never tech-scanned")
+    elif tech == "scanned":
+        where.append("c.tech_stack is not null")
+        which.append("tech-scanned")
+    if not where and not include_with_contact:
+        where.append("not exists (select 1 from gtm.contacts p where p.company_domain = c.domain)")
+        which.append("without a contact")
+    sql = f"select {', '.join(columns)} from gtm.companies c" + (" where " + " and ".join(where) if where else "")
     rows = 0
     with connect(pooled=True) as conn, open(out, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["name", "domain", "website", "linkedin_url"])
+        writer.writerow(columns)
         for row in conn.execute(sql + " order by domain", params):
-            writer.writerow(row)
+            writer.writerow([json.dumps(v, separators=(",", ":")) if isinstance(v, dict) else v for v in row])
             rows += 1
-    which = (f" whose contact's email_validation is {' / '.join(email_validation)}" if email_validation
-             else "" if include_with_contact else " without a contact")
-    logging.info("exported %d companies%s to %s", rows, which, out.relative_to(ROOT))
+    logging.info("exported %d companies%s to %s", rows, f" ({'; '.join(which)})" if which else "",
+                 out.relative_to(ROOT) if out.is_relative_to(ROOT) else out)
     return out
 
 
@@ -417,6 +432,10 @@ def main():
     parser.add_argument("--exclude-column", help="export-contacts: the domain column in --exclude-domains")
     parser.add_argument("--email-validation", help="export-companies: only companies whose contact's email_validation "
                         "is one of these comma-separated values (e.g. 'Safe to Send,Risky')")
+    parser.add_argument("--tech", choices=["scanned", "not-scanned"], help="export-companies: only companies never "
+                        "tech-scanned (not-scanned), or only those with a tech_stack, exported with it (scanned)")
+    parser.add_argument("--output", help="export-companies: CSV path to write (default: "
+                        "data/processed/companies_supabase_<date>.csv)")
     args = parser.parse_args()
     global ENV_FILE
     if args.env:
@@ -450,7 +469,8 @@ def main():
     elif args.command == "load-tech":
         load_tech(args.file, args.id_column, limit=args.limit)
     elif args.command == "export-companies":
-        export_companies(args.all, [v.strip() for v in args.email_validation.split(",")] if args.email_validation else None)
+        export_companies(args.all, [v.strip() for v in args.email_validation.split(",")] if args.email_validation else None,
+                         args.tech, args.output)
     elif args.command == "export-contacts":
         export_contacts(args.all, args.exclude_domains, args.exclude_column)
     else:

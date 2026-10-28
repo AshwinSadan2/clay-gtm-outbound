@@ -77,7 +77,7 @@ def log_error(code, message, request):
         }) + "\n")
 
 
-def analyze(host, key, site, attempts=3):
+def analyze(host, key, site, timeout, attempts=3):
     """Return (response, quota left, error code) or (None, quota left, error code) after logging.
     Raises QuotaReached on a quota 429."""
     req = urllib.request.Request(
@@ -86,7 +86,7 @@ def analyze(host, key, site, attempts=3):
     )
     for attempt in range(1, attempts + 1):
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 left = resp.headers.get(QUOTA_HEADER)
                 return json.load(resp), int(left) if left else None, None
         except urllib.error.HTTPError as e:
@@ -141,6 +141,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print the sites; call nothing")
     parser.add_argument("--keep", type=int, default=0, help="leave this many monthly requests unused")
     parser.add_argument("--rps", type=float, default=1, help=f"calls per second (max {MAX_RPS})")
+    parser.add_argument("--timeout", type=int, default=60, help="seconds to wait for one scan before giving up")
     parser.add_argument("--env", help="path to the .env file (default: .env in the current folder)")
     args = parser.parse_args()
     if args.env:
@@ -224,7 +225,7 @@ def main():
                 break
             time.sleep(1 / args.rps)
             try:
-                resp, left, error_code = analyze(host, key, rows[k][args.url_column].strip())
+                resp, left, error_code = analyze(host, key, rows[k][args.url_column].strip(), args.timeout)
             except QuotaReached:
                 stopped = "monthly quota used up (HTTP 429)"
                 state["quota_left"] = 0
