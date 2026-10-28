@@ -67,8 +67,8 @@ create index contacts_company_domain_idx on gtm.contacts (company_domain);
 | `email_status` | `text`, **generated** | database | null = never searched · `found` · `not_found` |
 | `email_mx_provider` | `text` | loader | google, microsoft, mimecast… |
 | `email_enriched_at` | `timestamptz` | loader | When the search finished (Icypeas `system.modifiedAt`); set for found **and** not-found |
-| `email_validation` | `text` | later | Separate validation tool's result; allowed values set when the tool is chosen |
-| `email_validation_at` | `timestamptz` | later | When validated |
+| `email_validation` | `text` | Debounce | Debounce `result`: `Safe to Send` · `Risky` · `Invalid` · `Unknown` (chosen 2026-10-27; reason and code stay in the CSV) |
+| `email_validation_at` | `timestamptz` | Debounce | When validated (UTC) |
 | `email_search_id` | `text` | loader | Icypeas search id: the only link back to the original result |
 
 **Rules enforced by the database**
