@@ -33,8 +33,12 @@ proposed by Claude and not yet confirmed by the owner.
    • Adjacent tech: not a direct match, but a related signal of fit
           │
           ▼
-6. Build the client's distiller doc (types → tools, corresponding vs adjacent).
-   Ask the user to RANK the signal types: not all signals carry the same priority.
+6. Claude writes the client's distiller doc, docs/<client>-tech-distiller.md (types → tools, corresponding vs
+   adjacent), from what the user says. The user never writes it or any config. Model the structure on
+   references/clay-relevant-tech-providers.md (the owner's original universe doc) and
+   references/clay-tech-distiller.md (a finished client doc). Ask the user to RANK the signal types: not all
+   signals carry the same priority. Then convert the doc to the config the script reads:
+   distill_tech_stack.py config --doc docs/<client>-tech-distiller.md --config data/processed/distiller_<client>_<date>.json
           │
           ▼
 7. Run the distiller on the 10 rows → hit rate (companies with ≥1 signal / 10).
@@ -66,7 +70,7 @@ proposed by Claude and not yet confirmed by the owner.
 | # | Point | Proposed |
 |---|---|---|
 | 1 | Sign-off between steps | Wait for the user's OK at every arrow, like the other skills *(assumption)* |
-| 2 | Where a client's distiller doc lives | `docs/<client>-tech-distiller.md`; the Clay doc stays in `references/` as the worked example *(assumption)* |
+| 2 | Where a client's distiller doc lives | **Decided:** `docs/<client>-tech-distiller.md` (written by Claude) → config JSON in `data/processed/distiller_<client>_<date>.json` (generated, not committed; rebuild from the doc). References keep the owner's universe doc + the Clay client doc as examples |
 | 3 | Corresponding vs adjacent in the output | Both kept and labelled in the distilled CSV *(assumption)* |
 | 4 | How the ranking is used | Distilled CSV gets the top-ranked signal per company + all matches *(assumption)* |
 | 5 | Supabase push | Load 10 rows → user checks → load the rest, after the run *(assumption)* |

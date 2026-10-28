@@ -1,7 +1,7 @@
 # Tech distiller — Clay (outbound campaign, 2026-10-27)
 
 The client's distiller doc: which detected tools count as a signal for this campaign, their type, and the
-ranking of the types. Read by `distill_tech_stack.py --distiller docs/clay-tech-distiller.md`. Drawn from the
+ranking of the types. Converted to its config with `distill_tech_stack.py config --doc docs/clay-tech-distiller.md --config data/processed/distiller_clay_<date>.json`. Drawn from the
 evergreen universe in `docs/clay-relevant-tech-providers.md` (CRM, sequencer and ad-pixel groups only).
 
 ## Decisions
