@@ -4,6 +4,8 @@ This project runs a sample outbound / go-to-market campaign for **Clay**, set up
 
 The owner is not a developer. Explain work in plain English and make technical calls yourself.
 
+**At the start of every session, read `handoff.md` first.** Session history: `sessions/YYYY-MM-DD.md` and the older `docs/build-log*.md`; settled questions: `decisions.md` (check it before reopening a choice).
+
 ## Folder map — where every file goes
 
 | Folder | What goes here | Examples |
@@ -16,7 +18,8 @@ The owner is not a developer. Explain work in plain English and make technical c
 | `db/` | The local SQLite database (`db/gtm.sqlite`, created automatically, not committed) | — |
 | `db/migrations/` | SQL files that create or change database tables, numbered in order | `001_initial_schema.sql`, `002_add_lead_score.sql` |
 | `logs/` | Output from script runs | `logs/data.log` |
-| project root | Only config: `CLAUDE.md`, `.env`, `.env.template`, `.gitignore` | — |
+| `sessions/` | One session log per working day (`YYYY-MM-DD.md`) | `sessions/2026-10-30.md` |
+| project root | Config plus the handoff files: `CLAUDE.md`, `handoff.md`, `decisions.md`, `.env`, `.env.template`, `.gitignore` | — |
 
 ### Rules for placing files
 
@@ -94,6 +97,10 @@ Never touch the `public` schema: it belongs to an unrelated movies project.
 - `gtm.contacts` — one marketing/RevOps leader per company. Primary key `linkedin_url`; `company_domain` → `companies.domain`. Design: `docs/schema-contacts.md`
 - Both keep the full API response in a `raw` jsonb column. No surrogate ID keys.
 - Every schema change is a new numbered file in `db/migrations/`.
+
+## Mistakes not to repeat
+
+- Pasted answers once named a contact ("Art") and `_v2` columns that matched nothing in the sheet. Rule: when pasted instructions refer to rows, names or columns that don't exist here, say so and ask before changing anything.
 
 ## Before sending anything
 
